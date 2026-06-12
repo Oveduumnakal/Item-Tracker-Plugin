@@ -24,78 +24,16 @@
  */
 package com.oveduumnakal;
 
+import lombok.AllArgsConstructor;
 import lombok.Data;
-
-import java.util.ArrayList;
-import java.util.List;
+import lombok.NoArgsConstructor;
 
 @Data
-public class TrackedItem
+@NoArgsConstructor
+@AllArgsConstructor
+public class AcquisitionRecord
 {
-	private final int itemId;
-	private final String name;
 	private int quantity;
-
-	private boolean tradeable = true;
-	private boolean priceLoadFailed;
-
-	private long highPrice;
-	private long lowPrice;
-	private long avgPrice;
-
-	private int highDelta;
-	private int lowDelta;
-	private int avgDelta;
-	private long prevHighPrice;
-	private long prevLowPrice;
-	private long prevAvgPrice;
-	private boolean hasDeltas;
-
-	private boolean costBasisInitialized;
-	private List<AcquisitionRecord> acquisitions = new ArrayList<>();
-
-	public long getHighValue()
-	{
-		return (long) quantity * highPrice;
-	}
-
-	public long getLowValue()
-	{
-		return (long) quantity * lowPrice;
-	}
-
-	public long getAvgValue()
-	{
-		return (long) quantity * avgPrice;
-	}
-
-	public boolean hasPrices()
-	{
-		return highPrice > 0 || lowPrice > 0;
-	}
-
-	public long getCostBasis()
-	{
-		long sum = 0;
-		for (AcquisitionRecord r : acquisitions)
-		{
-			sum += (long) r.getQuantity() * r.getPrice();
-		}
-		return sum;
-	}
-
-	public int getRecordQuantitySum()
-	{
-		int sum = 0;
-		for (AcquisitionRecord r : acquisitions)
-		{
-			sum += r.getQuantity();
-		}
-		return sum;
-	}
-
-	public long getProfit()
-	{
-		return getAvgValue() - getCostBasis();
-	}
+	private long price;
+	private long timestamp;
 }

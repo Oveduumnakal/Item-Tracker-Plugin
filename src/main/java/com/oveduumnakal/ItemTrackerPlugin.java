@@ -24,6 +24,9 @@
  */
 package com.oveduumnakal;
 
+import com.google.gson.Gson;
+import com.google.gson.JsonSyntaxException;
+import com.google.gson.reflect.TypeToken;
 import com.google.inject.Provides;
 import lombok.extern.slf4j.Slf4j;
 import com.google.common.collect.ImmutableSet;
@@ -66,6 +69,7 @@ import net.runelite.client.util.ImageUtil;
 import javax.inject.Inject;
 import javax.swing.*;
 import java.awt.image.BufferedImage;
+import java.lang.reflect.Type;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
@@ -108,6 +112,9 @@ public class ItemTrackerPlugin extends Plugin
 
 	@Inject
 	private Notifier notifier;
+
+	@Inject
+	private Gson gson;
 
 	@Inject
 	private OverlayManager overlayManager;
@@ -179,7 +186,8 @@ public class ItemTrackerPlugin extends Plugin
 				config::totalValueFormat,
 				config::priceDisplay,
 				config::geRefreshRate,
-				config::trackProfit
+				config::trackProfit,
+				this::onAcquisitionsEdited
 		);
 
 		final BufferedImage icon = ImageUtil.loadImageResource(getClass(), "icon.png");
@@ -239,6 +247,16 @@ public class ItemTrackerPlugin extends Plugin
 		);
 	}
 
+	private static final Type PERSIST_TYPE = new TypeToken<List<PersistedItem>>(){}.getType();
+
+	private static class PersistedItem
+	{
+		int itemId;
+		int quantity;
+		boolean costBasisInitialized;
+		List<AcquisitionRecord> acquisitions;
+	}
+
 	private void loadPersistedItems()
 	{
 		String saved = configManager.getRSProfileConfiguration(
@@ -248,7 +266,29 @@ public class ItemTrackerPlugin extends Plugin
 			return;
 		}
 
-		for (String part : saved.split(","))
+		String trimmed = saved.trim();
+		if (trimmed.startsWith("["))
+		{
+			try
+			{
+				List<PersistedItem> list = gson.fromJson(trimmed, PERSIST_TYPE);
+				if (list != null)
+				{
+					for (PersistedItem p : list)
+					{
+						addTrackedItem(p.itemId, p.quantity, p.acquisitions, p.costBasisInitialized);
+					}
+				}
+				return;
+			}
+			catch (JsonSyntaxException e)
+			{
+				log.warn("Failed to parse persisted item JSON; ignoring", e);
+				return;
+			}
+		}
+
+		for (String part : trimmed.split(","))
 		{
 			part = part.trim();
 			if (part.isEmpty()) continue;
@@ -257,8 +297,16 @@ public class ItemTrackerPlugin extends Plugin
 				String[] fields = part.split(":");
 				int itemId = Integer.parseInt(fields[0].trim());
 				int quantity = fields.length > 1 ? Integer.parseInt(fields[1].trim()) : 0;
-				long costBasis = fields.length > 2 ? Long.parseLong(fields[2].trim()) : -1;
-				addTrackedItem(itemId, quantity, costBasis);
+				long legacyCostBasis = fields.length > 2 ? Long.parseLong(fields[2].trim()) : -1;
+				List<AcquisitionRecord> records = null;
+				boolean initialized = false;
+				if (legacyCostBasis > 0 && quantity > 0)
+				{
+					records = new ArrayList<>();
+					records.add(new AcquisitionRecord(quantity, legacyCostBasis / quantity, System.currentTimeMillis()));
+					initialized = true;
+				}
+				addTrackedItem(itemId, quantity, records, initialized);
 			}
 			catch (NumberFormatException e)
 			{
@@ -267,27 +315,28 @@ public class ItemTrackerPlugin extends Plugin
 		}
 	}
 
-	private void persistTrackedItems()
+	void persistTrackedItems()
 	{
-		String ids = trackedItems.values().stream()
-				.map(item -> item.getItemId() + ":" + item.getQuantity() + ":" + item.getCostBasis())
-				.collect(Collectors.joining(","));
+		List<PersistedItem> list = new ArrayList<>();
+		for (TrackedItem item : trackedItems.values())
+		{
+			PersistedItem p = new PersistedItem();
+			p.itemId = item.getItemId();
+			p.quantity = item.getQuantity();
+			p.costBasisInitialized = item.isCostBasisInitialized();
+			p.acquisitions = item.getAcquisitions();
+			list.add(p);
+		}
 		configManager.setRSProfileConfiguration(
-				ItemTrackerConfig.GROUP, ItemTrackerConfig.KEY_TRACKED_ITEMS, ids);
+				ItemTrackerConfig.GROUP, ItemTrackerConfig.KEY_TRACKED_ITEMS, gson.toJson(list, PERSIST_TYPE));
 	}
 
 	private void addTrackedItem(int itemId)
 	{
-		addTrackedItem(itemId, 0, -1);
+		addTrackedItem(itemId, 0, null, false);
 	}
 
-	private void addTrackedItem(int itemId, int initialQuantity)
-	{
-		addTrackedItem(itemId, initialQuantity, -1);
-	}
-
-	// costBasis of -1 means uninitialized; it will be set on first price load.
-	private void addTrackedItem(int itemId, int initialQuantity, long costBasis)
+	private void addTrackedItem(int itemId, int initialQuantity, List<AcquisitionRecord> records, boolean costBasisInitialized)
 	{
 		clientThread.invokeLater(() ->
 		{
@@ -300,11 +349,11 @@ public class ItemTrackerPlugin extends Plugin
 			TrackedItem tracked = new TrackedItem(itemId, composition.getName());
 			tracked.setTradeable(composition.isTradeable());
 			tracked.setQuantity(initialQuantity);
-			if (costBasis >= 0)
+			if (records != null)
 			{
-				tracked.setCostBasis(costBasis);
-				tracked.setCostBasisInitialized(true);
+				tracked.setAcquisitions(new ArrayList<>(records));
 			}
+			tracked.setCostBasisInitialized(costBasisInitialized);
 			trackedItems.put(itemId, tracked);
 
 			syncQuantitiesForItem(tracked);
@@ -360,7 +409,11 @@ public class ItemTrackerPlugin extends Plugin
 
 				if (!item.isCostBasisInitialized())
 				{
-					item.setCostBasis((long) item.getQuantity() * prices.avg());
+					if (item.getQuantity() > 0)
+					{
+						item.getAcquisitions().add(new AcquisitionRecord(
+								item.getQuantity(), prices.avg(), System.currentTimeMillis()));
+					}
 					item.setCostBasisInitialized(true);
 					persistTrackedItems();
 				}
@@ -600,6 +653,27 @@ public class ItemTrackerPlugin extends Plugin
 		}
 	}
 
+	private void consumeFifo(TrackedItem tracked, int amount)
+	{
+		List<AcquisitionRecord> records = tracked.getAcquisitions();
+		int remaining = amount;
+		Iterator<AcquisitionRecord> it = records.iterator();
+		while (it.hasNext() && remaining > 0)
+		{
+			AcquisitionRecord r = it.next();
+			if (r.getQuantity() <= remaining)
+			{
+				remaining -= r.getQuantity();
+				it.remove();
+			}
+			else
+			{
+				r.setQuantity(r.getQuantity() - remaining);
+				remaining = 0;
+			}
+		}
+	}
+
 	private void recomputeAllQuantities()
 	{
 		for (TrackedItem tracked : trackedItems.values())
@@ -616,11 +690,12 @@ public class ItemTrackerPlugin extends Plugin
 				int delta = newQty - prevQty;
 				if (delta > 0)
 				{
-					tracked.setCostBasis(tracked.getCostBasis() + (long) delta * tracked.getAvgPrice());
+					tracked.getAcquisitions().add(new AcquisitionRecord(
+							delta, tracked.getAvgPrice(), System.currentTimeMillis()));
 				}
-				else if (delta < 0 && prevQty > 0)
+				else if (delta < 0)
 				{
-					tracked.setCostBasis(newQty == 0 ? 0 : tracked.getCostBasis() * newQty / prevQty);
+					consumeFifo(tracked, -delta);
 				}
 			}
 
@@ -668,6 +743,21 @@ public class ItemTrackerPlugin extends Plugin
 	boolean isTracked(int itemId)
 	{
 		return trackedItems.containsKey(itemId);
+	}
+
+	void onAcquisitionsEdited(int itemId)
+	{
+		clientThread.invokeLater(() ->
+		{
+			TrackedItem tracked = trackedItems.get(itemId);
+			if (tracked == null)
+			{
+				return;
+			}
+			tracked.setCostBasisInitialized(true);
+			persistTrackedItems();
+			refreshPanel();
+		});
 	}
 
 	private static final long GLOW_PERIOD_SLOW_MS = 2000;

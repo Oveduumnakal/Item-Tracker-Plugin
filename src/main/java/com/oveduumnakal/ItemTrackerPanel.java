@@ -37,16 +37,24 @@ import javax.swing.border.EmptyBorder;
 import javax.swing.border.MatteBorder;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
+import javax.swing.event.TableModelEvent;
+import javax.swing.table.AbstractTableModel;
+import javax.swing.table.DefaultTableCellRenderer;
 import java.awt.*;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseListener;
 import java.text.NumberFormat;
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -67,6 +75,29 @@ public class ItemTrackerPanel extends PluginPanel
 	private final Supplier<PriceDisplay> priceDisplaySupplier;
 	private final Supplier<Integer> refreshRateSupplier;
 	private final Supplier<Boolean> trackProfitSupplier;
+	private final Consumer<Integer> onAcquisitionsEdited;
+
+	private final CardLayout cardLayout = new CardLayout();
+	private final JPanel cardsHost = new JPanel(cardLayout);
+	private static final String CARD_MAIN = "main";
+	private static final String CARD_DETAIL = "detail";
+
+	private final Map<Integer, TrackedItem> currentItems = new HashMap<>();
+	private int detailItemId = -1;
+
+	private final JPanel detailCard = new JPanel(new BorderLayout(0, 8));
+	private final JLabel detailIconLabel = new JLabel();
+	private final JLabel detailNameLabel = new JLabel();
+	private final JLabel detailQtyLabel = new JLabel();
+	private final JLabel detailEaHighLabel = new JLabel();
+	private final JLabel detailEaLowLabel = new JLabel();
+	private final JLabel detailEaAvgLabel = new JLabel();
+	private final JLabel detailTotalHighLabel = new JLabel();
+	private final JLabel detailTotalLowLabel = new JLabel();
+	private final JLabel detailTotalAvgLabel = new JLabel();
+	private AcquisitionsTableModel acquisitionsModel;
+	private JTable acquisitionsTable;
+	private static final SimpleDateFormat TIMESTAMP_FMT = new SimpleDateFormat("yyyy-MM-dd HH:mm");
 
 	private final IconTextField searchField;
 	private final JPanel searchResultsPanel;
@@ -127,7 +158,8 @@ public class ItemTrackerPanel extends PluginPanel
 			Supplier<ValueFormat> totalValueFormatSupplier,
 			Supplier<PriceDisplay> priceDisplaySupplier,
 			Supplier<Integer> refreshRateSupplier,
-			Supplier<Boolean> trackProfitSupplier)
+			Supplier<Boolean> trackProfitSupplier,
+			Consumer<Integer> onAcquisitionsEdited)
 	{
 		this.itemManager = itemManager;
 		this.onAddItem = onAddItem;
@@ -137,6 +169,7 @@ public class ItemTrackerPanel extends PluginPanel
 		this.priceDisplaySupplier = priceDisplaySupplier;
 		this.refreshRateSupplier = refreshRateSupplier;
 		this.trackProfitSupplier = trackProfitSupplier;
+		this.onAcquisitionsEdited = onAcquisitionsEdited;
 
 		setLayout(new BorderLayout(0, 8));
 		setBorder(new EmptyBorder(10, 10, 10, 10));
@@ -295,9 +328,18 @@ public class ItemTrackerPanel extends PluginPanel
 		topPanel.add(searchResultsPanel);
 		topPanel.add(trackedLabelWrapper);
 
-		add(topPanel, BorderLayout.NORTH);
-		add(trackedItemsPanel, BorderLayout.CENTER);
-		add(bottomPanel, BorderLayout.SOUTH);
+		JPanel mainCard = new JPanel(new BorderLayout(0, 8));
+		mainCard.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		mainCard.add(topPanel, BorderLayout.NORTH);
+		mainCard.add(trackedItemsPanel, BorderLayout.CENTER);
+		mainCard.add(bottomPanel, BorderLayout.SOUTH);
+
+		buildDetailCard();
+
+		cardsHost.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		cardsHost.add(mainCard, CARD_MAIN);
+		cardsHost.add(detailCard, CARD_DETAIL);
+		add(cardsHost, BorderLayout.CENTER);
 
 		refreshAgeTimer = new Timer(1000, e -> updateRefreshLabel());
 		refreshAgeTimer.start();
@@ -517,7 +559,24 @@ public class ItemTrackerPanel extends PluginPanel
 	{
 		this.lastPriceRefresh = newLastPriceRefresh;
 		trackedItemIds.clear();
-		for (TrackedItem item : items) trackedItemIds.add(item.getItemId());
+		currentItems.clear();
+		for (TrackedItem item : items)
+		{
+			trackedItemIds.add(item.getItemId());
+			currentItems.put(item.getItemId(), item);
+		}
+		if (detailItemId > 0)
+		{
+			TrackedItem detail = currentItems.get(detailItemId);
+			if (detail != null)
+			{
+				SwingUtilities.invokeLater(() -> populateDetail(detail));
+			}
+			else
+			{
+				SwingUtilities.invokeLater(this::showMain);
+			}
+		}
 		SwingUtilities.invokeLater(() ->
 		{
 			loadingLabels.clear();
@@ -758,8 +817,19 @@ public class ItemTrackerPanel extends PluginPanel
 
 		card.add(centerPanel, BorderLayout.CENTER);
 
+		card.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 		MouseAdapter hoverListener = new MouseAdapter()
 		{
+			@Override
+			public void mouseClicked(MouseEvent e)
+			{
+				if (e.getSource() == removeBtn)
+				{
+					return;
+				}
+				showDetail(item.getItemId());
+			}
+
 			@Override
 			public void mouseEntered(MouseEvent e)
 			{
@@ -831,5 +901,235 @@ public class ItemTrackerPanel extends PluginPanel
 			return String.format("%.1fK gp", value / 1_000.0);
 		}
 		return NUMBER_FORMAT.format(value) + " gp";
+	}
+
+	private void buildDetailCard()
+	{
+		detailCard.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		detailCard.setBorder(new EmptyBorder(10, 10, 10, 10));
+
+		JButton backBtn = new JButton("← Back");
+		backBtn.setFocusPainted(false);
+		backBtn.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		backBtn.setForeground(Color.WHITE);
+		backBtn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+		backBtn.addActionListener(e -> showMain());
+
+		JPanel headerRow = new JPanel(new BorderLayout(6, 0));
+		headerRow.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		headerRow.add(backBtn, BorderLayout.WEST);
+
+		detailIconLabel.setPreferredSize(new Dimension(32, 32));
+		detailNameLabel.setForeground(Color.WHITE);
+		detailNameLabel.setFont(detailNameLabel.getFont().deriveFont(Font.BOLD, 13f));
+		detailQtyLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		detailQtyLabel.setFont(detailQtyLabel.getFont().deriveFont(11f));
+
+		JPanel nameStack = new JPanel();
+		nameStack.setLayout(new BoxLayout(nameStack, BoxLayout.Y_AXIS));
+		nameStack.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		nameStack.add(detailNameLabel);
+		nameStack.add(detailQtyLabel);
+
+		JPanel titleRow = new JPanel(new BorderLayout(6, 0));
+		titleRow.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		titleRow.setBorder(new EmptyBorder(8, 0, 8, 0));
+		titleRow.add(detailIconLabel, BorderLayout.WEST);
+		titleRow.add(nameStack, BorderLayout.CENTER);
+
+		JPanel topStack = new JPanel();
+		topStack.setLayout(new BoxLayout(topStack, BoxLayout.Y_AXIS));
+		topStack.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		topStack.add(headerRow);
+		topStack.add(titleRow);
+		topStack.add(buildPriceBlock("Price per item", detailEaHighLabel, detailEaLowLabel, detailEaAvgLabel));
+		topStack.add(Box.createVerticalStrut(6));
+		topStack.add(buildPriceBlock("Total value", detailTotalHighLabel, detailTotalLowLabel, detailTotalAvgLabel));
+
+		detailCard.add(topStack, BorderLayout.NORTH);
+
+		acquisitionsModel = new AcquisitionsTableModel();
+		acquisitionsTable = new JTable(acquisitionsModel);
+		acquisitionsTable.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		acquisitionsTable.setForeground(Color.WHITE);
+		acquisitionsTable.setGridColor(new Color(60, 60, 60));
+		acquisitionsTable.setRowHeight(22);
+		acquisitionsTable.getTableHeader().setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		acquisitionsTable.getTableHeader().setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		DefaultTableCellRenderer rightAlign = new DefaultTableCellRenderer();
+		rightAlign.setHorizontalAlignment(SwingConstants.RIGHT);
+		acquisitionsTable.getColumnModel().getColumn(0).setCellRenderer(rightAlign);
+		acquisitionsTable.getColumnModel().getColumn(1).setCellRenderer(rightAlign);
+
+		JScrollPane tableScroll = new JScrollPane(acquisitionsTable);
+		tableScroll.getViewport().setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		tableScroll.setBorder(BorderFactory.createLineBorder(new Color(60, 60, 60)));
+
+		JButton addRowBtn = new JButton("+ Add");
+		addRowBtn.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		addRowBtn.setForeground(Color.WHITE);
+		addRowBtn.setFocusPainted(false);
+		addRowBtn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+		addRowBtn.addActionListener(e -> {
+			TrackedItem t = currentItems.get(detailItemId);
+			if (t == null) return;
+			long price = t.getAvgPrice() > 0 ? t.getAvgPrice() : 0;
+			t.getAcquisitions().add(new AcquisitionRecord(0, price, System.currentTimeMillis()));
+			acquisitionsModel.fireTableDataChanged();
+			onAcquisitionsEdited.accept(detailItemId);
+		});
+
+		JButton removeRowBtn = new JButton("− Remove");
+		removeRowBtn.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		removeRowBtn.setForeground(Color.WHITE);
+		removeRowBtn.setFocusPainted(false);
+		removeRowBtn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+		removeRowBtn.addActionListener(e -> {
+			TrackedItem t = currentItems.get(detailItemId);
+			if (t == null) return;
+			int row = acquisitionsTable.getSelectedRow();
+			if (row < 0 || row >= t.getAcquisitions().size()) return;
+			t.getAcquisitions().remove(row);
+			acquisitionsModel.fireTableDataChanged();
+			onAcquisitionsEdited.accept(detailItemId);
+		});
+
+		JPanel tableButtons = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
+		tableButtons.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		tableButtons.add(addRowBtn);
+		tableButtons.add(removeRowBtn);
+
+		JPanel tableSection = new JPanel(new BorderLayout(0, 4));
+		tableSection.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		tableSection.setBorder(new EmptyBorder(8, 0, 0, 0));
+		JLabel acqTitle = new JLabel("Acquisitions");
+		acqTitle.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		acqTitle.setFont(acqTitle.getFont().deriveFont(Font.BOLD, 12f));
+		tableSection.add(acqTitle, BorderLayout.NORTH);
+		tableSection.add(tableScroll, BorderLayout.CENTER);
+		tableSection.add(tableButtons, BorderLayout.SOUTH);
+
+		detailCard.add(tableSection, BorderLayout.CENTER);
+	}
+
+	private JPanel buildPriceBlock(String title, JLabel highLabel, JLabel lowLabel, JLabel avgLabel)
+	{
+		JPanel block = new JPanel();
+		block.setLayout(new BoxLayout(block, BoxLayout.Y_AXIS));
+		block.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		block.setBorder(new EmptyBorder(6, 8, 6, 8));
+
+		JLabel titleLabel = new JLabel(title);
+		titleLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		titleLabel.setFont(titleLabel.getFont().deriveFont(Font.BOLD, 11f));
+
+		highLabel.setForeground(COLOR_HIGH);
+		highLabel.setFont(highLabel.getFont().deriveFont(Font.BOLD, 11f));
+		lowLabel.setForeground(COLOR_LOW);
+		lowLabel.setFont(lowLabel.getFont().deriveFont(Font.BOLD, 11f));
+		avgLabel.setForeground(COLOR_AVG);
+		avgLabel.setFont(avgLabel.getFont().deriveFont(Font.BOLD, 11f));
+
+		block.add(titleLabel);
+		block.add(Box.createVerticalStrut(2));
+		block.add(highLabel);
+		block.add(lowLabel);
+		block.add(avgLabel);
+		return block;
+	}
+
+	private void showDetail(int itemId)
+	{
+		TrackedItem item = currentItems.get(itemId);
+		if (item == null) return;
+		detailItemId = itemId;
+		populateDetail(item);
+		cardLayout.show(cardsHost, CARD_DETAIL);
+	}
+
+	private void showMain()
+	{
+		detailItemId = -1;
+		cardLayout.show(cardsHost, CARD_MAIN);
+	}
+
+	private void populateDetail(TrackedItem item)
+	{
+		AsyncBufferedImage icon = itemManager.getImage(item.getItemId());
+		icon.addTo(detailIconLabel);
+		detailNameLabel.setText(item.getName());
+		detailQtyLabel.setText("Qty: " + NUMBER_FORMAT.format(item.getQuantity()));
+
+		ValueFormat fmt = itemValueFormatSupplier.get();
+		boolean hasPrices = item.hasPrices();
+		detailEaHighLabel.setText("High: " + (hasPrices ? formatGp(item.getHighPrice(), fmt) : "—"));
+		detailEaLowLabel.setText( "Low:  " + (hasPrices ? formatGp(item.getLowPrice(),  fmt) : "—"));
+		detailEaAvgLabel.setText( "Avg:  " + (hasPrices ? formatGp(item.getAvgPrice(), fmt) : "—"));
+
+		ValueFormat totalFmt = totalValueFormatSupplier.get();
+		detailTotalHighLabel.setText("High: " + (hasPrices ? formatGp(item.getHighValue(), totalFmt) : "—"));
+		detailTotalLowLabel.setText( "Low:  " + (hasPrices ? formatGp(item.getLowValue(),  totalFmt) : "—"));
+		detailTotalAvgLabel.setText( "Avg:  " + (hasPrices ? formatGp(item.getAvgValue(), totalFmt) : "—"));
+
+		acquisitionsModel.setItem(item);
+	}
+
+	private class AcquisitionsTableModel extends AbstractTableModel
+	{
+		private final String[] COLS = {"Qty", "Price", "Timestamp"};
+		private TrackedItem item;
+
+		void setItem(TrackedItem item)
+		{
+			this.item = item;
+			fireTableDataChanged();
+		}
+
+		@Override public int getRowCount() { return item == null ? 0 : item.getAcquisitions().size(); }
+		@Override public int getColumnCount() { return COLS.length; }
+		@Override public String getColumnName(int c) { return COLS[c]; }
+		@Override public boolean isCellEditable(int r, int c) { return true; }
+
+		@Override
+		public Object getValueAt(int r, int c)
+		{
+			AcquisitionRecord rec = item.getAcquisitions().get(r);
+			switch (c)
+			{
+				case 0: return rec.getQuantity();
+				case 1: return rec.getPrice();
+				case 2: return TIMESTAMP_FMT.format(new Date(rec.getTimestamp()));
+				default: return "";
+			}
+		}
+
+		@Override
+		public void setValueAt(Object value, int r, int c)
+		{
+			if (item == null || r < 0 || r >= item.getAcquisitions().size()) return;
+			AcquisitionRecord rec = item.getAcquisitions().get(r);
+			String s = value == null ? "" : value.toString().trim();
+			try
+			{
+				switch (c)
+				{
+					case 0:
+						rec.setQuantity(Math.max(0, Integer.parseInt(s)));
+						break;
+					case 1:
+						rec.setPrice(Math.max(0, Long.parseLong(s)));
+						break;
+					case 2:
+						rec.setTimestamp(TIMESTAMP_FMT.parse(s).getTime());
+						break;
+				}
+				fireTableCellUpdated(r, c);
+				onAcquisitionsEdited.accept(detailItemId);
+			}
+			catch (NumberFormatException | ParseException ex)
+			{
+				// ignore invalid input, leave value unchanged
+			}
+		}
 	}
 }
