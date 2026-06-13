@@ -161,6 +161,10 @@ public class ItemTrackerPlugin extends Plugin
 
 	private final Map<Integer, Integer> runePouchCounts = new HashMap<>();
 
+	private final Set<Integer> seenContainersSinceLogin = new HashSet<>();
+
+	private boolean runePouchSeenSinceLogin = false;
+
 	private final Map<TileItem, Tile> groundItems = new HashMap<>();
 
 	private ItemTrackerPanel panel;
@@ -276,7 +280,7 @@ public class ItemTrackerPlugin extends Plugin
 				{
 					for (PersistedItem p : list)
 					{
-						addTrackedItem(p.itemId, p.quantity, p.acquisitions, p.costBasisInitialized);
+						addTrackedItem(p.itemId, p.quantity, p.acquisitions, p.costBasisInitialized, false);
 					}
 				}
 				return;
@@ -306,7 +310,7 @@ public class ItemTrackerPlugin extends Plugin
 					records.add(new AcquisitionRecord(quantity, legacyCostBasis / quantity, System.currentTimeMillis()));
 					initialized = true;
 				}
-				addTrackedItem(itemId, quantity, records, initialized);
+				addTrackedItem(itemId, quantity, records, initialized, false);
 			}
 			catch (NumberFormatException e)
 			{
@@ -338,6 +342,11 @@ public class ItemTrackerPlugin extends Plugin
 
 	private void addTrackedItem(int itemId, int initialQuantity, List<AcquisitionRecord> records, boolean costBasisInitialized)
 	{
+		addTrackedItem(itemId, initialQuantity, records, costBasisInitialized, true);
+	}
+
+	private void addTrackedItem(int itemId, int initialQuantity, List<AcquisitionRecord> records, boolean costBasisInitialized, boolean syncOnAdd)
+	{
 		clientThread.invokeLater(() ->
 		{
 			if (trackedItems.containsKey(itemId))
@@ -356,7 +365,10 @@ public class ItemTrackerPlugin extends Plugin
 			tracked.setCostBasisInitialized(costBasisInitialized);
 			trackedItems.put(itemId, tracked);
 
-			syncQuantitiesForItem(tracked);
+			if (syncOnAdd)
+			{
+				syncQuantitiesForItem(tracked);
+			}
 			persistTrackedItems();
 			refreshPanel();
 			refreshGePrices();
@@ -543,6 +555,8 @@ public class ItemTrackerPlugin extends Plugin
 			return;
 		}
 
+		boolean firstSync = seenContainersSinceLogin.add(containerId);
+
 		Map<Integer, Integer> counts = containerCounts.computeIfAbsent(containerId, k -> new HashMap<>());
 		counts.clear();
 		ItemContainer container = event.getItemContainer();
@@ -557,7 +571,7 @@ public class ItemTrackerPlugin extends Plugin
 			}
 		}
 
-		recomputeAllQuantities();
+		recomputeAllQuantities(firstSync);
 		refreshPanel();
 	}
 
@@ -617,6 +631,10 @@ public class ItemTrackerPlugin extends Plugin
 				break;
 			case LOGGED_IN:
 				trackedItems.clear();
+				containerCounts.clear();
+				runePouchCounts.clear();
+				seenContainersSinceLogin.clear();
+				runePouchSeenSinceLogin = false;
 				loadPersistedItems();
 				refreshPanel();
 				break;
@@ -631,7 +649,9 @@ public class ItemTrackerPlugin extends Plugin
 		if (RUNE_POUCH_VARBITS.contains(event.getVarbitId()))
 		{
 			syncRunePouch();
-			recomputeAllQuantities();
+			boolean firstSync = !runePouchSeenSinceLogin;
+			runePouchSeenSinceLogin = true;
+			recomputeAllQuantities(firstSync);
 			refreshPanel();
 		}
 	}
@@ -676,12 +696,26 @@ public class ItemTrackerPlugin extends Plugin
 
 	private void recomputeAllQuantities()
 	{
+		recomputeAllQuantities(false);
+	}
+
+	private void recomputeAllQuantities(boolean skipAcquisitionDelta)
+	{
 		for (TrackedItem tracked : trackedItems.values())
 		{
 			int newQty = runePouchCounts.getOrDefault(tracked.getItemId(), 0);
 			for (Map<Integer, Integer> c : containerCounts.values())
 			{
 				newQty += c.getOrDefault(tracked.getItemId(), 0);
+			}
+
+			if (skipAcquisitionDelta)
+			{
+				if (newQty > tracked.getQuantity())
+				{
+					tracked.setQuantity(newQty);
+				}
+				continue;
 			}
 
 			if (tracked.isCostBasisInitialized() && tracked.hasPrices())

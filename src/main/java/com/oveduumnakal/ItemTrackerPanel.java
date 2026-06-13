@@ -103,6 +103,7 @@ public class ItemTrackerPanel extends PluginPanel
 	private final JPanel searchResultsPanel;
 
 	private final JPanel trackedItemsPanel;
+	private final JPanel bottomPanel;
 
 	private final JLabel totalHighLabel;
 	private final JLabel totalLowLabel;
@@ -307,8 +308,9 @@ public class ItemTrackerPanel extends PluginPanel
 		profitSection.add(profitLabel);
 		profitSection.setVisible(false);
 
-		JPanel bottomPanel = new JPanel(new BorderLayout(0, 0));
+		bottomPanel = new JPanel(new BorderLayout(0, 0));
 		bottomPanel.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		bottomPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
 		bottomPanel.add(totalsTitle, BorderLayout.NORTH);
 		bottomPanel.add(totalsPanel, BorderLayout.CENTER);
 
@@ -331,8 +333,16 @@ public class ItemTrackerPanel extends PluginPanel
 		JPanel mainCard = new JPanel(new BorderLayout(0, 8));
 		mainCard.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		mainCard.add(topPanel, BorderLayout.NORTH);
-		mainCard.add(trackedItemsPanel, BorderLayout.CENTER);
-		mainCard.add(bottomPanel, BorderLayout.SOUTH);
+
+		JPanel bottomPinned = new JPanel(new BorderLayout());
+		bottomPinned.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		bottomPinned.add(bottomPanel, BorderLayout.NORTH);
+
+		JPanel itemsAndTotals = new JPanel(new BorderLayout(0, 8));
+		itemsAndTotals.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		itemsAndTotals.add(trackedItemsPanel, BorderLayout.NORTH);
+		itemsAndTotals.add(bottomPinned, BorderLayout.CENTER);
+		mainCard.add(itemsAndTotals, BorderLayout.CENTER);
 
 		buildDetailCard();
 
@@ -681,10 +691,16 @@ public class ItemTrackerPanel extends PluginPanel
 	{
 		final PriceIndicatorMode itemIndicatorMode = item.isHasDeltas() ? indicatorMode : PriceIndicatorMode.OFF;
 		final boolean hovered = item.getItemId() == hoveredItemId;
-		JPanel card = new JPanel(new BorderLayout(6, 0));
+		JPanel card = new JPanel(new BorderLayout(6, 0))
+		{
+			@Override
+			public Dimension getMaximumSize()
+			{
+				return new Dimension(Integer.MAX_VALUE, getPreferredSize().height);
+			}
+		};
 		card.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 		card.setBorder(new EmptyBorder(6, 8, 6, 8));
-		card.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
 
 		JLabel iconLabel = new JLabel();
 		iconLabel.setPreferredSize(new Dimension(32, 32));
@@ -915,8 +931,16 @@ public class ItemTrackerPanel extends PluginPanel
 		backBtn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 		backBtn.addActionListener(e -> showMain());
 
-		JPanel headerRow = new JPanel(new BorderLayout(6, 0));
+		JPanel headerRow = new JPanel(new BorderLayout(6, 0))
+		{
+			@Override
+			public Dimension getMaximumSize()
+			{
+				return new Dimension(Integer.MAX_VALUE, getPreferredSize().height);
+			}
+		};
 		headerRow.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		headerRow.setAlignmentX(Component.LEFT_ALIGNMENT);
 		headerRow.add(backBtn, BorderLayout.WEST);
 
 		detailIconLabel.setPreferredSize(new Dimension(32, 32));
@@ -925,15 +949,22 @@ public class ItemTrackerPanel extends PluginPanel
 		detailQtyLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 		detailQtyLabel.setFont(detailQtyLabel.getFont().deriveFont(11f));
 
-		JPanel nameStack = new JPanel();
-		nameStack.setLayout(new BoxLayout(nameStack, BoxLayout.Y_AXIS));
+		JPanel nameStack = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
 		nameStack.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		nameStack.add(detailNameLabel);
 		nameStack.add(detailQtyLabel);
 
-		JPanel titleRow = new JPanel(new BorderLayout(6, 0));
+		JPanel titleRow = new JPanel(new BorderLayout(6, 0))
+		{
+			@Override
+			public Dimension getMaximumSize()
+			{
+				return new Dimension(Integer.MAX_VALUE, getPreferredSize().height);
+			}
+		};
 		titleRow.setBackground(ColorScheme.DARK_GRAY_COLOR);
-		titleRow.setBorder(new EmptyBorder(8, 0, 8, 0));
+		titleRow.setBorder(new EmptyBorder(16, 0, 0, 0));
+		titleRow.setAlignmentX(Component.LEFT_ALIGNMENT);
 		titleRow.add(detailIconLabel, BorderLayout.WEST);
 		titleRow.add(nameStack, BorderLayout.CENTER);
 
@@ -942,14 +973,24 @@ public class ItemTrackerPanel extends PluginPanel
 		topStack.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		topStack.add(headerRow);
 		topStack.add(titleRow);
-		topStack.add(buildPriceBlock("Price per item", detailEaHighLabel, detailEaLowLabel, detailEaAvgLabel));
-		topStack.add(Box.createVerticalStrut(6));
-		topStack.add(buildPriceBlock("Total value", detailTotalHighLabel, detailTotalLowLabel, detailTotalAvgLabel));
+		topStack.add(buildDetailSectionTitle("Price per item", true));
+		topStack.add(buildPriceBlock(detailEaHighLabel, detailEaLowLabel, detailEaAvgLabel));
+		topStack.add(buildDetailSectionTitle("Total value", false));
+		topStack.add(buildPriceBlock(detailTotalHighLabel, detailTotalLowLabel, detailTotalAvgLabel));
 
 		detailCard.add(topStack, BorderLayout.NORTH);
 
 		acquisitionsModel = new AcquisitionsTableModel();
-		acquisitionsTable = new JTable(acquisitionsModel);
+		acquisitionsTable = new JTable(acquisitionsModel)
+		{
+			@Override
+			public Dimension getPreferredScrollableViewportSize()
+			{
+				int visibleRows = Math.max(5, getRowCount() + 1);
+				Dimension prefBody = super.getPreferredScrollableViewportSize();
+				return new Dimension(prefBody.width, visibleRows * getRowHeight());
+			}
+		};
 		acquisitionsTable.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 		acquisitionsTable.setForeground(Color.WHITE);
 		acquisitionsTable.setGridColor(new Color(60, 60, 60));
@@ -976,6 +1017,7 @@ public class ItemTrackerPanel extends PluginPanel
 			long price = t.getAvgPrice() > 0 ? t.getAvgPrice() : 0;
 			t.getAcquisitions().add(new AcquisitionRecord(0, price, System.currentTimeMillis()));
 			acquisitionsModel.fireTableDataChanged();
+			acquisitionsTable.revalidate();
 			onAcquisitionsEdited.accept(detailItemId);
 		});
 
@@ -991,6 +1033,7 @@ public class ItemTrackerPanel extends PluginPanel
 			if (row < 0 || row >= t.getAcquisitions().size()) return;
 			t.getAcquisitions().remove(row);
 			acquisitionsModel.fireTableDataChanged();
+			acquisitionsTable.revalidate();
 			onAcquisitionsEdited.accept(detailItemId);
 		});
 
@@ -1001,27 +1044,28 @@ public class ItemTrackerPanel extends PluginPanel
 
 		JPanel tableSection = new JPanel(new BorderLayout(0, 4));
 		tableSection.setBackground(ColorScheme.DARK_GRAY_COLOR);
-		tableSection.setBorder(new EmptyBorder(8, 0, 0, 0));
-		JLabel acqTitle = new JLabel("Acquisitions");
-		acqTitle.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-		acqTitle.setFont(acqTitle.getFont().deriveFont(Font.BOLD, 12f));
-		tableSection.add(acqTitle, BorderLayout.NORTH);
+		tableSection.setAlignmentX(Component.LEFT_ALIGNMENT);
+		tableSection.add(buildDetailSectionTitle("Acquisitions", true), BorderLayout.NORTH);
 		tableSection.add(tableScroll, BorderLayout.CENTER);
 		tableSection.add(tableButtons, BorderLayout.SOUTH);
 
-		detailCard.add(tableSection, BorderLayout.CENTER);
+		topStack.add(tableSection);
 	}
 
-	private JPanel buildPriceBlock(String title, JLabel highLabel, JLabel lowLabel, JLabel avgLabel)
+	private JPanel buildPriceBlock(JLabel highLabel, JLabel lowLabel, JLabel avgLabel)
 	{
-		JPanel block = new JPanel();
+		JPanel block = new JPanel()
+		{
+			@Override
+			public Dimension getMaximumSize()
+			{
+				return new Dimension(Integer.MAX_VALUE, getPreferredSize().height);
+			}
+		};
 		block.setLayout(new BoxLayout(block, BoxLayout.Y_AXIS));
 		block.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 		block.setBorder(new EmptyBorder(6, 8, 6, 8));
-
-		JLabel titleLabel = new JLabel(title);
-		titleLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-		titleLabel.setFont(titleLabel.getFont().deriveFont(Font.BOLD, 11f));
+		block.setAlignmentX(Component.LEFT_ALIGNMENT);
 
 		highLabel.setForeground(COLOR_HIGH);
 		highLabel.setFont(highLabel.getFont().deriveFont(Font.BOLD, 11f));
@@ -1030,12 +1074,52 @@ public class ItemTrackerPanel extends PluginPanel
 		avgLabel.setForeground(COLOR_AVG);
 		avgLabel.setFont(avgLabel.getFont().deriveFont(Font.BOLD, 11f));
 
-		block.add(titleLabel);
-		block.add(Box.createVerticalStrut(2));
-		block.add(highLabel);
-		block.add(lowLabel);
-		block.add(avgLabel);
+		JPanel highRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 3));
+		highRow.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		highRow.add(highLabel);
+
+		JPanel lowRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 3));
+		lowRow.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		lowRow.add(lowLabel);
+
+		JPanel avgRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 3));
+		avgRow.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		avgRow.add(avgLabel);
+
+		block.add(highRow);
+		block.add(lowRow);
+		block.add(avgRow);
 		return block;
+	}
+
+	private JLabel buildDetailSectionTitle(String text, boolean withDivider)
+	{
+		JLabel title = new JLabel(text, SwingConstants.CENTER)
+		{
+			@Override
+			public Dimension getMaximumSize()
+			{
+				return new Dimension(Integer.MAX_VALUE, getPreferredSize().height);
+			}
+		};
+		title.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		title.setFont(title.getFont().deriveFont(Font.BOLD, 12f));
+		title.setAlignmentX(Component.LEFT_ALIGNMENT);
+		if (withDivider)
+		{
+			title.setBorder(BorderFactory.createCompoundBorder(
+				BorderFactory.createCompoundBorder(
+					new EmptyBorder(10, 0, 0, 0),
+					new MatteBorder(1, 0, 0, 0, new Color(80, 80, 80))
+				),
+				new EmptyBorder(10, 0, 6, 0)
+			));
+		}
+		else
+		{
+			title.setBorder(new EmptyBorder(10, 0, 6, 0));
+		}
+		return title;
 	}
 
 	private void showDetail(int itemId)
@@ -1058,7 +1142,9 @@ public class ItemTrackerPanel extends PluginPanel
 		AsyncBufferedImage icon = itemManager.getImage(item.getItemId());
 		icon.addTo(detailIconLabel);
 		detailNameLabel.setText(item.getName());
-		detailQtyLabel.setText("Qty: " + NUMBER_FORMAT.format(item.getQuantity()));
+
+		int detailQty = item.getRecordQuantitySum();
+		detailQtyLabel.setText("Qty: " + NUMBER_FORMAT.format(detailQty));
 
 		ValueFormat fmt = itemValueFormatSupplier.get();
 		boolean hasPrices = item.hasPrices();
@@ -1067,11 +1153,12 @@ public class ItemTrackerPanel extends PluginPanel
 		detailEaAvgLabel.setText( "Avg:  " + (hasPrices ? formatGp(item.getAvgPrice(), fmt) : "—"));
 
 		ValueFormat totalFmt = totalValueFormatSupplier.get();
-		detailTotalHighLabel.setText("High: " + (hasPrices ? formatGp(item.getHighValue(), totalFmt) : "—"));
-		detailTotalLowLabel.setText( "Low:  " + (hasPrices ? formatGp(item.getLowValue(),  totalFmt) : "—"));
-		detailTotalAvgLabel.setText( "Avg:  " + (hasPrices ? formatGp(item.getAvgValue(), totalFmt) : "—"));
+		detailTotalHighLabel.setText("High: " + (hasPrices ? formatGp((long) detailQty * item.getHighPrice(), totalFmt) : "—"));
+		detailTotalLowLabel.setText( "Low:  " + (hasPrices ? formatGp((long) detailQty * item.getLowPrice(),  totalFmt) : "—"));
+		detailTotalAvgLabel.setText( "Avg:  " + (hasPrices ? formatGp((long) detailQty * item.getAvgPrice(), totalFmt) : "—"));
 
 		acquisitionsModel.setItem(item);
+		acquisitionsTable.revalidate();
 	}
 
 	private class AcquisitionsTableModel extends AbstractTableModel
