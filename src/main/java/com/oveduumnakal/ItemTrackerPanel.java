@@ -40,7 +40,9 @@ import javax.swing.event.DocumentListener;
 import javax.swing.event.TableModelEvent;
 import javax.swing.table.AbstractTableModel;
 import javax.swing.table.DefaultTableCellRenderer;
+import javax.swing.table.TableCellRenderer;
 import java.awt.*;
+import java.awt.image.BufferedImage;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseListener;
@@ -97,7 +99,50 @@ public class ItemTrackerPanel extends PluginPanel
 	private final JLabel detailTotalAvgLabel = new JLabel();
 	private AcquisitionsTableModel acquisitionsModel;
 	private JTable acquisitionsTable;
-	private static final SimpleDateFormat TIMESTAMP_FMT = new SimpleDateFormat("yyyy-MM-dd HH:mm");
+	private static final String DISPLAY_TIMESTAMP_PATTERN = "MM/dd/yyyy hh:mm a";
+
+	private static final String[] PARSE_TIMESTAMP_PATTERNS = {
+			"MM/dd/yyyy hh:mm a",
+			"M/d/yyyy h:mm a",
+			"M/d/yyyy h:m a",
+			"MM/dd/yyyy HH:mm",
+			"M/d/yyyy H:m",
+			"M/d/yyyy H:mm",
+			"yyyy-MM-dd HH:mm:ss",
+			"yyyy-MM-dd HH:mm",
+			"yyyy-MM-dd'T'HH:mm",
+			"yyyy-MM-dd",
+			"MM/dd/yyyy",
+			"M/d/yyyy"
+	};
+
+	private static String formatTimestamp(long millis)
+	{
+		return new SimpleDateFormat(DISPLAY_TIMESTAMP_PATTERN).format(new Date(millis));
+	}
+
+	private static long parseTimestamp(String input) throws ParseException
+	{
+		String s = input == null ? "" : input.trim();
+		if (s.isEmpty())
+		{
+			throw new ParseException("empty", 0);
+		}
+		for (String pattern : PARSE_TIMESTAMP_PATTERNS)
+		{
+			SimpleDateFormat fmt = new SimpleDateFormat(pattern);
+			fmt.setLenient(true);
+			try
+			{
+				return fmt.parse(s).getTime();
+			}
+			catch (ParseException ignored)
+			{
+				// try next pattern
+			}
+		}
+		throw new ParseException(s, 0);
+	}
 
 	private final IconTextField searchField;
 	private final JPanel searchResultsPanel;
@@ -924,7 +969,10 @@ public class ItemTrackerPanel extends PluginPanel
 		detailCard.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		detailCard.setBorder(new EmptyBorder(10, 10, 10, 10));
 
-		JButton backBtn = new JButton("← Back");
+		JButton backBtn = new JButton("Back", buildLeftArrowIcon());
+		backBtn.setIconTextGap(6);
+		backBtn.setVerticalAlignment(SwingConstants.CENTER);
+		backBtn.setHorizontalAlignment(SwingConstants.CENTER);
 		backBtn.setFocusPainted(false);
 		backBtn.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 		backBtn.setForeground(Color.WHITE);
@@ -947,14 +995,9 @@ public class ItemTrackerPanel extends PluginPanel
 		detailNameLabel.setForeground(Color.WHITE);
 		detailNameLabel.setFont(detailNameLabel.getFont().deriveFont(Font.BOLD, 13f));
 		detailQtyLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-		detailQtyLabel.setFont(detailQtyLabel.getFont().deriveFont(11f));
+		detailQtyLabel.setFont(detailQtyLabel.getFont().deriveFont(13f));
 
-		JPanel nameStack = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
-		nameStack.setBackground(ColorScheme.DARK_GRAY_COLOR);
-		nameStack.add(detailNameLabel);
-		nameStack.add(detailQtyLabel);
-
-		JPanel titleRow = new JPanel(new BorderLayout(6, 0))
+		JPanel titleRow = new JPanel()
 		{
 			@Override
 			public Dimension getMaximumSize()
@@ -962,11 +1005,21 @@ public class ItemTrackerPanel extends PluginPanel
 				return new Dimension(Integer.MAX_VALUE, getPreferredSize().height);
 			}
 		};
+		titleRow.setLayout(new BoxLayout(titleRow, BoxLayout.X_AXIS));
 		titleRow.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		titleRow.setBorder(new EmptyBorder(16, 0, 0, 0));
 		titleRow.setAlignmentX(Component.LEFT_ALIGNMENT);
-		titleRow.add(detailIconLabel, BorderLayout.WEST);
-		titleRow.add(nameStack, BorderLayout.CENTER);
+
+		detailIconLabel.setAlignmentY(Component.CENTER_ALIGNMENT);
+		detailNameLabel.setAlignmentY(Component.CENTER_ALIGNMENT);
+		detailQtyLabel.setAlignmentY(Component.CENTER_ALIGNMENT);
+
+		titleRow.add(detailIconLabel);
+		titleRow.add(Box.createHorizontalStrut(8));
+		titleRow.add(detailNameLabel);
+		titleRow.add(Box.createHorizontalStrut(8));
+		titleRow.add(detailQtyLabel);
+		titleRow.add(Box.createHorizontalGlue());
 
 		JPanel topStack = new JPanel();
 		topStack.setLayout(new BoxLayout(topStack, BoxLayout.Y_AXIS));
@@ -995,12 +1048,58 @@ public class ItemTrackerPanel extends PluginPanel
 		acquisitionsTable.setForeground(Color.WHITE);
 		acquisitionsTable.setGridColor(new Color(60, 60, 60));
 		acquisitionsTable.setRowHeight(22);
+		acquisitionsTable.setFillsViewportHeight(true);
 		acquisitionsTable.getTableHeader().setBackground(ColorScheme.DARKER_GRAY_COLOR);
 		acquisitionsTable.getTableHeader().setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-		DefaultTableCellRenderer rightAlign = new DefaultTableCellRenderer();
-		rightAlign.setHorizontalAlignment(SwingConstants.RIGHT);
-		acquisitionsTable.getColumnModel().getColumn(0).setCellRenderer(rightAlign);
-		acquisitionsTable.getColumnModel().getColumn(1).setCellRenderer(rightAlign);
+		DefaultTableCellRenderer centerAlign = new DefaultTableCellRenderer();
+		centerAlign.setHorizontalAlignment(SwingConstants.CENTER);
+		JTextField centerEditorField = new JTextField();
+		centerEditorField.setHorizontalAlignment(SwingConstants.CENTER);
+		DefaultCellEditor centerEditor = new DefaultCellEditor(centerEditorField);
+		for (int i = 0; i < acquisitionsTable.getColumnCount(); i++)
+		{
+			acquisitionsTable.getColumnModel().getColumn(i).setCellRenderer(centerAlign);
+			acquisitionsTable.getColumnModel().getColumn(i).setCellEditor(centerEditor);
+		}
+		TableCellRenderer headerRenderer = acquisitionsTable.getTableHeader().getDefaultRenderer();
+		if (headerRenderer instanceof DefaultTableCellRenderer)
+		{
+			((DefaultTableCellRenderer) headerRenderer).setHorizontalAlignment(SwingConstants.CENTER);
+		}
+
+		acquisitionsTable.addMouseListener(new MouseAdapter()
+		{
+			@Override
+			public void mouseClicked(MouseEvent e)
+			{
+				if (e.getClickCount() != 2 || e.getButton() != MouseEvent.BUTTON1)
+				{
+					return;
+				}
+				int row = acquisitionsTable.rowAtPoint(e.getPoint());
+				if (row >= 0)
+				{
+					return;
+				}
+				TrackedItem t = currentItems.get(detailItemId);
+				if (t == null) return;
+				long price = t.getAvgPrice() > 0 ? t.getAvgPrice() : 0;
+				t.getAcquisitions().add(new AcquisitionRecord(0, price, System.currentTimeMillis()));
+				acquisitionsModel.fireTableDataChanged();
+				acquisitionsTable.revalidate();
+				onAcquisitionsEdited.accept(detailItemId);
+				int newRow = acquisitionsModel.getRowCount() - 1;
+				if (newRow >= 0 && acquisitionsTable.editCellAt(newRow, 0))
+				{
+					acquisitionsTable.changeSelection(newRow, 0, false, false);
+					Component editor = acquisitionsTable.getEditorComponent();
+					if (editor != null)
+					{
+						editor.requestFocusInWindow();
+					}
+				}
+			}
+		});
 
 		JScrollPane tableScroll = new JScrollPane(acquisitionsTable);
 		tableScroll.getViewport().setBackground(ColorScheme.DARKER_GRAY_COLOR);
@@ -1026,6 +1125,7 @@ public class ItemTrackerPanel extends PluginPanel
 		removeRowBtn.setForeground(Color.WHITE);
 		removeRowBtn.setFocusPainted(false);
 		removeRowBtn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+		removeRowBtn.setEnabled(false);
 		removeRowBtn.addActionListener(e -> {
 			TrackedItem t = currentItems.get(detailItemId);
 			if (t == null) return;
@@ -1036,16 +1136,45 @@ public class ItemTrackerPanel extends PluginPanel
 			acquisitionsTable.revalidate();
 			onAcquisitionsEdited.accept(detailItemId);
 		});
+		acquisitionsTable.getSelectionModel().addListSelectionListener(e -> {
+			int row = acquisitionsTable.getSelectedRow();
+			removeRowBtn.setEnabled(row >= 0 && row < acquisitionsModel.getRowCount());
+		});
 
-		JPanel tableButtons = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
+		JButton cleanBtn = new JButton(buildBrushIcon());
+		cleanBtn.setToolTipText("Remove all rows with quantity 0");
+		cleanBtn.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		cleanBtn.setForeground(Color.WHITE);
+		cleanBtn.setFocusPainted(false);
+		cleanBtn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+		cleanBtn.setMargin(new Insets(2, 4, 2, 4));
+		cleanBtn.addActionListener(e -> {
+			TrackedItem t = currentItems.get(detailItemId);
+			if (t == null) return;
+			boolean removed = t.getAcquisitions().removeIf(r -> r.getQuantity() == 0);
+			if (!removed) return;
+			acquisitionsModel.fireTableDataChanged();
+			acquisitionsTable.revalidate();
+			onAcquisitionsEdited.accept(detailItemId);
+		});
+
+		JPanel tableButtons = new JPanel();
+		tableButtons.setLayout(new BoxLayout(tableButtons, BoxLayout.X_AXIS));
 		tableButtons.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		tableButtons.setBorder(new EmptyBorder(4, 0, 4, 0));
+		addRowBtn.setAlignmentY(Component.CENTER_ALIGNMENT);
+		removeRowBtn.setAlignmentY(Component.CENTER_ALIGNMENT);
+		cleanBtn.setAlignmentY(Component.CENTER_ALIGNMENT);
 		tableButtons.add(addRowBtn);
+		tableButtons.add(Box.createHorizontalGlue());
 		tableButtons.add(removeRowBtn);
+		tableButtons.add(Box.createHorizontalGlue());
+		tableButtons.add(cleanBtn);
 
 		JPanel tableSection = new JPanel(new BorderLayout(0, 4));
 		tableSection.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		tableSection.setAlignmentX(Component.LEFT_ALIGNMENT);
-		tableSection.add(buildDetailSectionTitle("Acquisitions", true), BorderLayout.NORTH);
+		tableSection.add(buildDetailSectionTitle("Item Collection Log", true), BorderLayout.NORTH);
 		tableSection.add(tableScroll, BorderLayout.CENTER);
 		tableSection.add(tableButtons, BorderLayout.SOUTH);
 
@@ -1090,6 +1219,35 @@ public class ItemTrackerPanel extends PluginPanel
 		block.add(lowRow);
 		block.add(avgRow);
 		return block;
+	}
+
+	private Icon buildLeftArrowIcon()
+	{
+		int w = 9;
+		int h = 10;
+		BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+		Graphics2D g = img.createGraphics();
+		g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+		g.setColor(Color.WHITE);
+		int midY = h / 2;
+		int[] xs = {0, w - 1, w - 1};
+		int[] ys = {midY, 0, h - 1};
+		g.fillPolygon(xs, ys, xs.length);
+		g.dispose();
+		return new ImageIcon(img);
+	}
+
+	private Icon buildBrushIcon()
+	{
+		try
+		{
+			BufferedImage img = net.runelite.client.util.ImageUtil.loadImageResource(getClass(), "broom.png");
+			return new ImageIcon(img);
+		}
+		catch (Exception ex)
+		{
+			return new ImageIcon(new BufferedImage(14, 14, BufferedImage.TYPE_INT_ARGB));
+		}
 	}
 
 	private JLabel buildDetailSectionTitle(String text, boolean withDivider)
@@ -1185,7 +1343,7 @@ public class ItemTrackerPanel extends PluginPanel
 			{
 				case 0: return rec.getQuantity();
 				case 1: return rec.getPrice();
-				case 2: return TIMESTAMP_FMT.format(new Date(rec.getTimestamp()));
+				case 2: return formatTimestamp(rec.getTimestamp());
 				default: return "";
 			}
 		}
@@ -1207,7 +1365,7 @@ public class ItemTrackerPanel extends PluginPanel
 						rec.setPrice(Math.max(0, Long.parseLong(s)));
 						break;
 					case 2:
-						rec.setTimestamp(TIMESTAMP_FMT.parse(s).getTime());
+						rec.setTimestamp(parseTimestamp(s));
 						break;
 				}
 				fireTableCellUpdated(r, c);
