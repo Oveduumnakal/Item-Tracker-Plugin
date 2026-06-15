@@ -40,11 +40,15 @@ public interface ItemTrackerConfig extends Config
 	String KEY_TRACKED_ITEMS = "trackedItemIds";
 	String KEY_PRICE_DISPLAY = "priceDisplay";
 	String KEY_GE_REFRESH_RATE = "geRefreshRate";
-	String KEY_ITEM_VALUE_FORMAT = "itemValueFormat";
 	String KEY_TOTAL_VALUE_FORMAT = "totalValueFormat";
 	String KEY_NOTIFY_ON_VALUE_THRESHOLD = "notifyOnValueThreshold";
 	String KEY_VALUE_THRESHOLD = "valueThreshold";
 	String KEY_TRACK_PROFIT = "trackProfit";
+	String KEY_AUTO_UPDATE_QUANTITY = "autoUpdateQuantity";
+	String KEY_SHOW_TOTALS = "showTotals";
+	String KEY_ROW_1_WINDOW = "row1Window";
+	String KEY_ROW_2_WINDOW = "row2Window";
+	String KEY_ROW_3_WINDOW = "row3Window";
 
 	@ConfigSection(
 			name = "Prices",
@@ -100,6 +104,42 @@ public interface ItemTrackerConfig extends Config
 		return PriceDisplay.BOTH;
 	}
 
+	@ConfigItem(
+			keyName = KEY_ROW_1_WINDOW,
+			name = "Price Display 1",
+			description = "Time window shown on the first per-item price line. Select None to hide.",
+			section = pricesSection,
+			position = 2
+	)
+	default TimeWindow row1Window()
+	{
+		return TimeWindow.LIVE;
+	}
+
+	@ConfigItem(
+			keyName = KEY_ROW_2_WINDOW,
+			name = "Price Display 2",
+			description = "Time window shown on the second per-item price line. Select None to hide.",
+			section = pricesSection,
+			position = 3
+	)
+	default TimeWindow row2Window()
+	{
+		return TimeWindow.H6;
+	}
+
+	@ConfigItem(
+			keyName = KEY_ROW_3_WINDOW,
+			name = "Price Display 3",
+			description = "Time window shown on the third per-item price line. Select None to hide.",
+			section = pricesSection,
+			position = 4
+	)
+	default TimeWindow row3Window()
+	{
+		return TimeWindow.H24;
+	}
+
 	@Range(min = 30)
 	@ConfigItem(
 			keyName = KEY_GE_REFRESH_RATE,
@@ -114,27 +154,27 @@ public interface ItemTrackerConfig extends Config
 	}
 
 	@ConfigItem(
-			keyName = KEY_ITEM_VALUE_FORMAT,
-			name = "Item Price",
-			description = "How to display the value of individual tracked items",
+			keyName = KEY_TOTAL_VALUE_FORMAT,
+			name = "Total Price",
+			description = "How to display values in the totals section",
 			section = formattingSection,
 			position = 0
 	)
-	default ValueFormat itemValueFormat()
+	default ValueFormat totalValueFormat()
 	{
 		return ValueFormat.ABBREVIATED;
 	}
 
 	@ConfigItem(
-			keyName = KEY_TOTAL_VALUE_FORMAT,
-			name = "Total Price",
-			description = "How to display the running total value",
+			keyName = KEY_SHOW_TOTALS,
+			name = "Show Totals",
+			description = "Show the totals section below the tracked items",
 			section = formattingSection,
-			position = 1
+			position = 2
 	)
-	default ValueFormat totalValueFormat()
+	default boolean showTotals()
 	{
-		return ValueFormat.ABBREVIATED;
+		return true;
 	}
 
 	@ConfigItem(
@@ -208,6 +248,18 @@ public interface ItemTrackerConfig extends Config
 	default GlowSpeed glowEffect()
 	{
 		return GlowSpeed.MEDIUM;
+	}
+
+	@ConfigItem(
+			keyName = KEY_AUTO_UPDATE_QUANTITY,
+			name = "Auto-Update Quantity",
+			description = "Automatically update tracked-item quantities from inventory/bank changes. When off, manual edits still work.",
+			section = miscellaneousSection,
+			position = -1
+	)
+	default boolean autoUpdateQuantity()
+	{
+		return true;
 	}
 
 	@ConfigItem(

@@ -1,33 +1,17 @@
 /*
  * Copyright (c) 2026, Oveduumnakal
  * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 package com.oveduumnakal;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
 import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.HttpUrl;
@@ -37,8 +21,10 @@ import okhttp3.Response;
 
 import javax.inject.Inject;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 @Slf4j
@@ -46,6 +32,10 @@ public class WikiRealtimePriceClient
 {
 	private static final HttpUrl LATEST_URL = HttpUrl.parse(
 			"https://prices.runescape.wiki/api/v1/osrs/latest");
+	private static final String TIMESERIES_URL =
+			"https://prices.runescape.wiki/api/v1/osrs/timeseries";
+
+	private static final String USER_AGENT = "RuneLite ItemTracker Plugin";
 
 	@Value
 	public static class ItemPrices
@@ -63,6 +53,18 @@ public class WikiRealtimePriceClient
 		}
 	}
 
+	@Data
+	@AllArgsConstructor
+	@NoArgsConstructor
+	public static class PricePoint
+	{
+		private long timestamp;
+		private long avgHighPrice;
+		private long avgLowPrice;
+		private long highPriceVolume;
+		private long lowPriceVolume;
+	}
+
 	private final OkHttpClient httpClient;
 	private final Gson gson;
 
@@ -77,7 +79,7 @@ public class WikiRealtimePriceClient
 	{
 		Request request = new Request.Builder()
 				.url(LATEST_URL)
-				.header("User-Agent", "RuneLite ItemTracker Plugin")
+				.header("User-Agent", USER_AGENT)
 				.build();
 
 		try (Response response = httpClient.newCall(request).execute())
@@ -120,5 +122,131 @@ public class WikiRealtimePriceClient
 			log.warn("Error fetching wiki prices", e);
 			return Collections.emptyMap();
 		}
+	}
+
+	public List<PricePoint> fetchTimeseries(int itemId, String timestep)
+	{
+		HttpUrl url = HttpUrl.parse(TIMESERIES_URL).newBuilder()
+				.addQueryParameter("timestep", timestep)
+				.addQueryParameter("id", Integer.toString(itemId))
+				.build();
+
+		Request request = new Request.Builder()
+				.url(url)
+				.header("User-Agent", USER_AGENT)
+				.build();
+
+		try (Response response = httpClient.newCall(request).execute())
+		{
+			if (!response.isSuccessful() || response.body() == null)
+			{
+				log.warn("Wiki timeseries fetch failed: {}", response.code());
+				return Collections.emptyList();
+			}
+
+			JsonObject root = gson.fromJson(response.body().charStream(), JsonObject.class);
+			JsonArray data = root.getAsJsonArray("data");
+			if (data == null)
+			{
+				return Collections.emptyList();
+			}
+
+			List<PricePoint> points = new ArrayList<>(data.size());
+			for (JsonElement el : data)
+			{
+				try
+				{
+					JsonObject obj = el.getAsJsonObject();
+					long ts = readLong(obj, "timestamp");
+					long avgHigh = readLong(obj, "avgHighPrice");
+					long avgLow = readLong(obj, "avgLowPrice");
+					long highVol = readLong(obj, "highPriceVolume");
+					long lowVol = readLong(obj, "lowPriceVolume");
+					points.add(new PricePoint(ts, avgHigh, avgLow, highVol, lowVol));
+				}
+				catch (IllegalStateException e)
+				{
+					// skip malformed entries
+				}
+			}
+			return points;
+		}
+		catch (IOException | JsonParseException e)
+		{
+			log.warn("Error fetching wiki timeseries", e);
+			return Collections.emptyList();
+		}
+	}
+
+	private static long readLong(JsonObject obj, String key)
+	{
+		if (!obj.has(key) || obj.get(key).isJsonNull())
+		{
+			return 0L;
+		}
+		try
+		{
+			return obj.get(key).getAsLong();
+		}
+		catch (NumberFormatException | IllegalStateException e)
+		{
+			return 0L;
+		}
+	}
+
+	public static PriceStats computeStats(List<PricePoint> points, TimeWindow window)
+	{
+		if (points == null || points.isEmpty())
+		{
+			return new PriceStats(0, 0, 0, 0);
+		}
+
+		long nowSec = System.currentTimeMillis() / 1000L;
+		long cutoff = window.getDuration().getSeconds() > 0
+				? nowSec - window.getDuration().getSeconds()
+				: Long.MIN_VALUE;
+
+		long highSum = 0, lowSum = 0;
+		int highCount = 0, lowCount = 0;
+		long weightedSum = 0;
+		long totalVol = 0;
+		long volume = 0;
+
+		for (PricePoint p : points)
+		{
+			if (p.getTimestamp() < cutoff)
+			{
+				continue;
+			}
+			if (p.getAvgHighPrice() > 0)
+			{
+				highSum += p.getAvgHighPrice();
+				highCount++;
+			}
+			if (p.getAvgLowPrice() > 0)
+			{
+				lowSum += p.getAvgLowPrice();
+				lowCount++;
+			}
+			long hv = p.getHighPriceVolume();
+			long lv = p.getLowPriceVolume();
+			weightedSum += p.getAvgHighPrice() * hv + p.getAvgLowPrice() * lv;
+			totalVol += hv + lv;
+			volume += hv + lv;
+		}
+
+		long high = highCount > 0 ? Math.round((double) highSum / highCount) : 0;
+		long low = lowCount > 0 ? Math.round((double) lowSum / lowCount) : 0;
+		long avg;
+		if (totalVol > 0)
+		{
+			avg = Math.round((double) weightedSum / totalVol);
+		}
+		else
+		{
+			avg = (high + low) / 2;
+		}
+
+		return new PriceStats(high, low, avg, volume);
 	}
 }

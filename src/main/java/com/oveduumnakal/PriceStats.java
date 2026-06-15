@@ -9,11 +9,12 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 @Data
-@NoArgsConstructor
 @AllArgsConstructor
-public class AcquisitionRecord
+@NoArgsConstructor
+public class PriceStats
 {
-	private int quantity;
-	private long boughtAt;
-	private Long soldAt;
+	private long high;
+	private long low;
+	private long avg;
+	private long volume;
 }

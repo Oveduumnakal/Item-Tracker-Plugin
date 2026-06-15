@@ -186,12 +186,14 @@ public class ItemTrackerPlugin extends Plugin
 				itemManager,
 				this::addTrackedItem,
 				this::removeTrackedItem,
-				config::itemValueFormat,
 				config::totalValueFormat,
 				config::priceDisplay,
 				config::geRefreshRate,
 				config::trackProfit,
-				this::onAcquisitionsEdited
+				config::showTotals,
+				() -> Arrays.asList(config.row1Window(), config.row2Window(), config.row3Window()),
+				this::onAcquisitionsEdited,
+				this::requestSeries
 		);
 
 		final BufferedImage icon = ImageUtil.loadImageResource(getClass(), "icon.png");
@@ -280,7 +282,7 @@ public class ItemTrackerPlugin extends Plugin
 				{
 					for (PersistedItem p : list)
 					{
-						addTrackedItem(p.itemId, p.quantity, p.acquisitions, p.costBasisInitialized, false);
+						addTrackedItem(p.itemId, p.quantity, p.acquisitions, p.costBasisInitialized, false, TrackItemMode.TRACK);
 					}
 				}
 				return;
@@ -292,31 +294,6 @@ public class ItemTrackerPlugin extends Plugin
 			}
 		}
 
-		for (String part : trimmed.split(","))
-		{
-			part = part.trim();
-			if (part.isEmpty()) continue;
-			try
-			{
-				String[] fields = part.split(":");
-				int itemId = Integer.parseInt(fields[0].trim());
-				int quantity = fields.length > 1 ? Integer.parseInt(fields[1].trim()) : 0;
-				long legacyCostBasis = fields.length > 2 ? Long.parseLong(fields[2].trim()) : -1;
-				List<AcquisitionRecord> records = null;
-				boolean initialized = false;
-				if (legacyCostBasis > 0 && quantity > 0)
-				{
-					records = new ArrayList<>();
-					records.add(new AcquisitionRecord(quantity, legacyCostBasis / quantity, System.currentTimeMillis()));
-					initialized = true;
-				}
-				addTrackedItem(itemId, quantity, records, initialized, false);
-			}
-			catch (NumberFormatException e)
-			{
-				log.warn("Invalid tracked item entry in config: {}", part);
-			}
-		}
 	}
 
 	void persistTrackedItems()
@@ -337,15 +314,21 @@ public class ItemTrackerPlugin extends Plugin
 
 	private void addTrackedItem(int itemId)
 	{
-		addTrackedItem(itemId, 0, null, false);
+		addTrackedItem(itemId, TrackItemMode.TRACK);
+	}
+
+	private void addTrackedItem(int itemId, TrackItemMode mode)
+	{
+		addTrackedItem(itemId, 0, null, false, true, mode);
 	}
 
 	private void addTrackedItem(int itemId, int initialQuantity, List<AcquisitionRecord> records, boolean costBasisInitialized)
 	{
-		addTrackedItem(itemId, initialQuantity, records, costBasisInitialized, true);
+		addTrackedItem(itemId, initialQuantity, records, costBasisInitialized, true, TrackItemMode.TRACK);
 	}
 
-	private void addTrackedItem(int itemId, int initialQuantity, List<AcquisitionRecord> records, boolean costBasisInitialized, boolean syncOnAdd)
+	private void addTrackedItem(int itemId, int initialQuantity, List<AcquisitionRecord> records,
+			boolean costBasisInitialized, boolean syncOnAdd, TrackItemMode mode)
 	{
 		clientThread.invokeLater(() ->
 		{
@@ -358,6 +341,7 @@ public class ItemTrackerPlugin extends Plugin
 			TrackedItem tracked = new TrackedItem(itemId, composition.getName());
 			tracked.setTradeable(composition.isTradeable());
 			tracked.setQuantity(initialQuantity);
+			tracked.setMode(mode == null ? TrackItemMode.TRACK : mode);
 			if (records != null)
 			{
 				tracked.setAcquisitions(new ArrayList<>(records));
@@ -365,7 +349,7 @@ public class ItemTrackerPlugin extends Plugin
 			tracked.setCostBasisInitialized(costBasisInitialized);
 			trackedItems.put(itemId, tracked);
 
-			if (syncOnAdd)
+			if (syncOnAdd && tracked.getMode() == TrackItemMode.TRACK)
 			{
 				syncQuantitiesForItem(tracked);
 			}
@@ -382,6 +366,47 @@ public class ItemTrackerPlugin extends Plugin
 			trackedItems.remove(itemId);
 			persistTrackedItems();
 			refreshPanel();
+		});
+	}
+
+	private void requestSeries(int itemId, TimeWindow window)
+	{
+		final String timestep = (window == null ? TimeWindow.H24 : window).getTimestep();
+		executor.execute(() ->
+		{
+			List<WikiRealtimePriceClient.PricePoint> points = wikiPriceClient.fetchTimeseries(itemId, timestep);
+			clientThread.invokeLater(() ->
+			{
+				TrackedItem tracked = trackedItems.get(itemId);
+				if (tracked == null)
+				{
+					return;
+				}
+				tracked.setDetailSeries(points);
+
+				// Compute window stats for all configured + breakdown windows
+				Map<TimeWindow, PriceStats> stats = new java.util.EnumMap<>(TimeWindow.class);
+				for (TimeWindow w : TimeWindow.values())
+				{
+					if (w == TimeWindow.NONE)
+					{
+						continue;
+					}
+					if (w == TimeWindow.LIVE)
+					{
+						stats.put(w, new PriceStats(tracked.getHighPrice(), tracked.getLowPrice(), tracked.getAvgPrice(), 0));
+					}
+					else
+					{
+						stats.put(w, WikiRealtimePriceClient.computeStats(points, w));
+					}
+				}
+				tracked.setWindowStats(stats);
+
+				final long live = tracked.getAvgPrice();
+				SwingUtilities.invokeLater(() -> panel.updateDetailGraph(itemId, points, live));
+				refreshPanel();
+			});
 		});
 	}
 
@@ -418,13 +443,15 @@ public class ItemTrackerPlugin extends Plugin
 				item.setLowPrice(prices.getLow());
 				item.setAvgPrice(prices.avg());
 				item.setPriceLoadFailed(false);
+				item.getWindowStats().put(TimeWindow.LIVE,
+						new PriceStats(prices.getHigh(), prices.getLow(), prices.avg(), 0));
 
 				if (!item.isCostBasisInitialized())
 				{
 					if (item.getQuantity() > 0)
 					{
 						item.getAcquisitions().add(new AcquisitionRecord(
-								item.getQuantity(), prices.avg(), System.currentTimeMillis()));
+								item.getQuantity(), prices.avg(), null));
 					}
 					item.setCostBasisInitialized(true);
 					persistTrackedItems();
@@ -456,10 +483,12 @@ public class ItemTrackerPlugin extends Plugin
 
 		switch (event.getKey())
 		{
-			case ItemTrackerConfig.KEY_ITEM_VALUE_FORMAT:
 			case ItemTrackerConfig.KEY_TOTAL_VALUE_FORMAT:
 			case ItemTrackerConfig.KEY_PRICE_DISPLAY:
 			case ItemTrackerConfig.KEY_TRACK_PROFIT:
+			case ItemTrackerConfig.KEY_ROW_1_WINDOW:
+			case ItemTrackerConfig.KEY_ROW_2_WINDOW:
+			case ItemTrackerConfig.KEY_ROW_3_WINDOW:
 				refreshPanel();
 				break;
 			case ItemTrackerConfig.KEY_GE_REFRESH_RATE:
@@ -675,22 +704,27 @@ public class ItemTrackerPlugin extends Plugin
 		}
 	}
 
-	private void consumeFifo(TrackedItem tracked, int amount)
+	private void closeFifo(TrackedItem tracked, int amount, long soldAtPrice)
 	{
 		List<AcquisitionRecord> records = tracked.getAcquisitions();
 		int remaining = amount;
-		Iterator<AcquisitionRecord> it = records.iterator();
-		while (it.hasNext() && remaining > 0)
+		for (int i = 0; i < records.size() && remaining > 0; i++)
 		{
-			AcquisitionRecord r = it.next();
+			AcquisitionRecord r = records.get(i);
+			if (r.getSoldAt() != null)
+			{
+				continue;
+			}
 			if (r.getQuantity() <= remaining)
 			{
 				remaining -= r.getQuantity();
-				it.remove();
+				r.setSoldAt(soldAtPrice);
 			}
 			else
 			{
+				AcquisitionRecord closed = new AcquisitionRecord(remaining, r.getBoughtAt(), soldAtPrice);
 				r.setQuantity(r.getQuantity() - remaining);
+				records.add(i, closed);
 				remaining = 0;
 			}
 		}
@@ -698,7 +732,10 @@ public class ItemTrackerPlugin extends Plugin
 
 	private void applySourceDelta(Map<Integer, Integer> prevCounts, Map<Integer, Integer> newCounts, boolean firstSync)
 	{
-		long now = System.currentTimeMillis();
+		if (!config.autoUpdateQuantity())
+		{
+			return;
+		}
 		for (TrackedItem tracked : trackedItems.values())
 		{
 			int itemId = tracked.getItemId();
@@ -716,11 +753,11 @@ public class ItemTrackerPlugin extends Plugin
 				if (delta > 0)
 				{
 					tracked.getAcquisitions().add(new AcquisitionRecord(
-							delta, tracked.getAvgPrice(), now));
+							delta, tracked.getAvgPrice(), null));
 				}
 				else
 				{
-					consumeFifo(tracked, -delta);
+					closeFifo(tracked, -delta, tracked.getAvgPrice());
 				}
 			}
 
