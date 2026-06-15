@@ -144,8 +144,9 @@ public class ItemTrackerPanel extends PluginPanel
 	private final Timer loadingGlowTimer;
 
 	private static final long PULSE_DURATION_MS = 1000;
-	private static final int PRICES_LEFT_PAD = 20;
+	private static final int PRICES_LEFT_PAD = 10;
 	private static final int PRICES_RIGHT_PAD = 0;
+	private static final Color COLOR_VOLUME = new Color(200, 200, 200);
 	private final List<PulseEntry> pulseEntries = new ArrayList<>();
 	private final Timer pulseTimer;
 	private final JLabel totalHighDeltaLabel;
@@ -912,18 +913,20 @@ public class ItemTrackerPanel extends PluginPanel
 					continue;
 				}
 				PriceStats stats = item.getWindowStats().get(window);
-				long h, l, a;
+				long h, l, a, vol;
 				if (window == TimeWindow.LIVE || stats == null)
 				{
 					h = item.getHighPrice();
 					l = item.getLowPrice();
 					a = item.getAvgPrice();
+					vol = stats != null ? stats.getVolume() : 0;
 				}
 				else
 				{
 					h = stats.getHigh();
 					l = stats.getLow();
 					a = stats.getAvg();
+					vol = stats.getVolume();
 				}
 
 				JLabel windowLbl = new JLabel(window.toString());
@@ -945,14 +948,14 @@ public class ItemTrackerPanel extends PluginPanel
 				if (showHighLow)
 				{
 					cols[slot].setForeground(COLOR_HIGH);
-					installItemValue(cols[slot++], h, "", TINT_HIGH);
+					installItemValue(cols[slot++], h, "", "High", TINT_HIGH);
 					cols[slot].setForeground(COLOR_LOW);
-					installItemValue(cols[slot++], l, "", TINT_LOW);
+					installItemValue(cols[slot++], l, "", "Low", TINT_LOW);
 				}
 				if (showAvg)
 				{
 					cols[slot].setForeground(COLOR_AVG);
-					installItemValue(cols[slot++], a, "", TINT_AVG);
+					installItemValue(cols[slot++], a, "", "Avg", TINT_AVG);
 				}
 				int col = 1;
 				for (int i = 0; i < cols.length; i++)
@@ -962,6 +965,23 @@ public class ItemTrackerPanel extends PluginPanel
 					c.anchor = GridBagConstraints.CENTER;
 					pricesPanel.add(cols[i], c);
 				}
+
+				JLabel volumeLabel = new JLabel("", SwingConstants.CENTER);
+				volumeLabel.setForeground(COLOR_VOLUME);
+				volumeLabel.setFont(FontManager.getRunescapeSmallFont());
+				if (window == TimeWindow.LIVE)
+				{
+					volumeLabel.setText("-");
+				}
+				else
+				{
+					volumeLabel.setText(formatItemShort(vol));
+					volumeLabel.setToolTipText("Volume: " + NUMBER_FORMAT.format(vol));
+				}
+				c.gridx = col++;
+				c.weightx = 1;
+				c.anchor = GridBagConstraints.CENTER;
+				pricesPanel.add(volumeLabel, c);
 
 				// Inline delta pulse on each row (driven by live avg delta).
 				JLabel pulse = createDeltaLabel();
@@ -1067,9 +1087,15 @@ public class ItemTrackerPanel extends PluginPanel
 
 	private void installItemValue(JLabel label, long value, String prefix, Color tint)
 	{
+		installItemValue(label, value, prefix, null, tint);
+	}
+
+	private void installItemValue(JLabel label, long value, String prefix, String tooltipLabel, Color tint)
+	{
 		String shortText = prefix + formatItemShort(value);
 		label.setText(shortText);
-		label.setToolTipText(NUMBER_FORMAT.format(value) + " gp");
+		String tooltipPrefix = tooltipLabel == null ? "" : tooltipLabel + ": ";
+		label.setToolTipText(tooltipPrefix + NUMBER_FORMAT.format(value) + " gp");
 		for (MouseListener ml : label.getMouseListeners())
 		{
 			if (ml instanceof HoverTintListener)

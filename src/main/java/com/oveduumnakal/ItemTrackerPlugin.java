@@ -373,6 +373,11 @@ public class ItemTrackerPlugin extends Plugin
 
 	private void requestSeries(int itemId, TimeWindow window)
 	{
+		requestSeries(itemId, window, true);
+	}
+
+	private void requestSeries(int itemId, TimeWindow window, boolean refreshAfter)
+	{
 		final String timestep = (window == null ? TimeWindow.H24 : window).getTimestep();
 		executor.execute(() ->
 		{
@@ -407,7 +412,10 @@ public class ItemTrackerPlugin extends Plugin
 
 				final long live = tracked.getAvgPrice();
 				SwingUtilities.invokeLater(() -> panel.updateDetailGraph(itemId, points, live));
-				refreshPanel();
+				if (refreshAfter)
+				{
+					refreshPanel();
+				}
 			});
 		});
 	}
@@ -472,6 +480,14 @@ public class ItemTrackerPlugin extends Plugin
 
 		lastPriceRefresh = Instant.now();
 		refreshPanel(true);
+
+		for (TrackedItem item : trackedItems.values())
+		{
+			if (item.isTradeable() && item.hasPrices())
+			{
+				requestSeries(item.getItemId(), TimeWindow.H24, false);
+			}
+		}
 	}
 
 	@Subscribe
