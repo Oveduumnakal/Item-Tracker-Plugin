@@ -83,6 +83,7 @@ public class ItemTrackerPanel extends PluginPanel
 	private final Supplier<PriceDisplay> priceDisplaySupplier;
 	private final Supplier<Integer> refreshRateSupplier;
 	private final Supplier<Boolean> trackProfitSupplier;
+	private final Supplier<Boolean> showPerItemProfitSupplier;
 	private final Supplier<Boolean> showTotalsSupplier;
 	private final Supplier<List<TimeWindow>> rowWindowsSupplier;
 	private final Consumer<Integer> onAcquisitionsEdited;
@@ -181,6 +182,7 @@ public class ItemTrackerPanel extends PluginPanel
 			Supplier<PriceDisplay> priceDisplaySupplier,
 			Supplier<Integer> refreshRateSupplier,
 			Supplier<Boolean> trackProfitSupplier,
+			Supplier<Boolean> showPerItemProfitSupplier,
 			Supplier<Boolean> showTotalsSupplier,
 			Supplier<List<TimeWindow>> rowWindowsSupplier,
 			Consumer<Integer> onAcquisitionsEdited,
@@ -193,6 +195,7 @@ public class ItemTrackerPanel extends PluginPanel
 		this.priceDisplaySupplier = priceDisplaySupplier;
 		this.refreshRateSupplier = refreshRateSupplier;
 		this.trackProfitSupplier = trackProfitSupplier;
+		this.showPerItemProfitSupplier = showPerItemProfitSupplier;
 		this.showTotalsSupplier = showTotalsSupplier;
 		this.rowWindowsSupplier = rowWindowsSupplier;
 		this.onAcquisitionsEdited = onAcquisitionsEdited;
@@ -1002,6 +1005,42 @@ public class ItemTrackerPanel extends PluginPanel
 			avgLabel = null;
 
 			centerPanel.add(pricesPanel);
+
+			if (showPerItemProfitSupplier.get() && trackProfitSupplier.get()
+					&& item.isCostBasisInitialized() && item.hasPrices())
+			{
+				long itemProfit = item.getAvgValue() - item.getCostBasis();
+				String sign = itemProfit > 0 ? "+" : "";
+				ValueFormat fmt = totalValueFormatSupplier.get();
+
+				JLabel itemProfitPrefix = new JLabel("Est. Profit:");
+				itemProfitPrefix.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+				itemProfitPrefix.setFont(FontManager.getRunescapeSmallFont());
+
+				JLabel itemProfitValue = new JLabel(sign + formatTotalGp(itemProfit, fmt));
+				itemProfitValue.setFont(FontManager.getRunescapeSmallFont());
+				itemProfitValue.setForeground(itemProfit == 0 ? ColorScheme.LIGHT_GRAY_COLOR
+						: (itemProfit > 0 ? COLOR_HIGH : COLOR_LOW));
+				applyTotalTooltip(itemProfitValue, itemProfit, fmt);
+
+				JPanel itemProfitRow = new JPanel(new BorderLayout(6, 0));
+				itemProfitRow.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+				itemProfitRow.add(itemProfitPrefix, BorderLayout.WEST);
+				itemProfitRow.add(itemProfitValue, BorderLayout.CENTER);
+
+				JPanel itemProfitSection = new JPanel(new BorderLayout());
+				itemProfitSection.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+				itemProfitSection.setAlignmentX(Component.LEFT_ALIGNMENT);
+				itemProfitSection.setBorder(BorderFactory.createCompoundBorder(
+						BorderFactory.createCompoundBorder(
+								new EmptyBorder(4, 0, 0, 0),
+								new MatteBorder(1, 0, 0, 0, new Color(80, 80, 80))
+						),
+						new EmptyBorder(4, 10, 0, 0)
+				));
+				itemProfitSection.add(itemProfitRow, BorderLayout.CENTER);
+				centerPanel.add(itemProfitSection);
+			}
 		}
 
 		card.add(centerPanel, BorderLayout.CENTER);

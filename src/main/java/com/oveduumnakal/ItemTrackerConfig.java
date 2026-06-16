@@ -202,6 +202,8 @@ public interface ItemTrackerConfig extends Config
 		return 0;
 	}
 
+	String KEY_SHOW_PER_ITEM_PROFIT = "showPerItemProfit";
+
 	@ConfigItem(
 			keyName = KEY_TRACK_PROFIT,
 			name = "Track Profit",
@@ -210,6 +212,18 @@ public interface ItemTrackerConfig extends Config
 			position = 0
 	)
 	default boolean trackProfit()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+			keyName = KEY_SHOW_PER_ITEM_PROFIT,
+			name = "Show Per-Item Profit",
+			description = "Show an Est. Profit row under each tracked item using only that item's cost basis",
+			section = profitTrackingSection,
+			position = 1
+	)
+	default boolean showPerItemProfit()
 	{
 		return true;
 	}

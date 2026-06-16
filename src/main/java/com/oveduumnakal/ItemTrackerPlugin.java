@@ -192,6 +192,7 @@ public class ItemTrackerPlugin extends Plugin
 				config::priceDisplay,
 				config::geRefreshRate,
 				config::trackProfit,
+				config::showPerItemProfit,
 				config::showTotals,
 				() -> Arrays.asList(config.row1Window(), config.row2Window(), config.row3Window()),
 				this::onAcquisitionsEdited,
@@ -503,6 +504,7 @@ public class ItemTrackerPlugin extends Plugin
 			case ItemTrackerConfig.KEY_TOTAL_VALUE_FORMAT:
 			case ItemTrackerConfig.KEY_PRICE_DISPLAY:
 			case ItemTrackerConfig.KEY_TRACK_PROFIT:
+			case ItemTrackerConfig.KEY_SHOW_PER_ITEM_PROFIT:
 			case ItemTrackerConfig.KEY_ROW_1_WINDOW:
 			case ItemTrackerConfig.KEY_ROW_2_WINDOW:
 			case ItemTrackerConfig.KEY_ROW_3_WINDOW:
