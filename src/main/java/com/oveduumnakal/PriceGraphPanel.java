@@ -32,6 +32,8 @@ import java.util.function.Consumer;
 
 public class PriceGraphPanel extends JPanel
 {
+	public enum Mode { PRICE, VOLUME }
+
 	private static final Color COLOR_HIGH = new Color(100, 220, 100);
 	private static final Color COLOR_LOW = new Color(220, 100, 100);
 	private static final Color COLOR_AVG = new Color(255, 200, 0);
@@ -39,6 +41,7 @@ public class PriceGraphPanel extends JPanel
 	private static final Color VOLUME_COLOR = new Color(120, 140, 180, 180);
 	private static final Color BG_COLOR = ColorScheme.DARKER_GRAY_COLOR;
 
+	private final Mode mode;
 	private List<WikiRealtimePriceClient.PricePoint> points = Collections.emptyList();
 	private long currentPrice;
 	private TimeWindow activeWindow = TimeWindow.H24;
@@ -54,7 +57,6 @@ public class PriceGraphPanel extends JPanel
 	private int hoverX = -1;
 
 	private static final int TAB_BAR_HEIGHT = 24;
-	private static final int VOLUME_STRIP_HEIGHT = 28;
 	private static final int RIGHT_AXIS_WIDTH = 56;
 	private static final int BOTTOM_AXIS_HEIGHT = 18;
 	private static final int LEFT_PAD = 8;
@@ -62,39 +64,52 @@ public class PriceGraphPanel extends JPanel
 
 	public PriceGraphPanel()
 	{
+		this(Mode.PRICE);
+	}
+
+	public PriceGraphPanel(Mode mode)
+	{
+		this.mode = mode;
 		setLayout(new java.awt.BorderLayout());
 		setBackground(BG_COLOR);
-		setPreferredSize(new Dimension(220, 220));
+		setPreferredSize(mode == Mode.PRICE ? new Dimension(220, 200) : new Dimension(220, 90));
 
-		tabsBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 2));
-		tabsBar.setBackground(BG_COLOR);
-		for (int i = 0; i < TIMEFRAMES.length; i++)
+		if (mode == Mode.PRICE)
 		{
-			final TimeWindow tw = TIMEFRAMES[i];
-			final JLabel tab = new JLabel(TIMEFRAME_LABELS[i]);
-			tab.setForeground(Color.WHITE);
-			tab.setFont(FontManager.getRunescapeSmallFont());
-			tab.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-			tab.setBorder(new EmptyBorder(2, 4, 2, 4));
-			tab.addMouseListener(new MouseAdapter()
+			tabsBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 2));
+			tabsBar.setBackground(BG_COLOR);
+			for (int i = 0; i < TIMEFRAMES.length; i++)
 			{
-				@Override
-				public void mouseClicked(MouseEvent e)
+				final TimeWindow tw = TIMEFRAMES[i];
+				final JLabel tab = new JLabel(TIMEFRAME_LABELS[i]);
+				tab.setForeground(Color.WHITE);
+				tab.setFont(FontManager.getRunescapeSmallFont());
+				tab.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+				tab.setBorder(new EmptyBorder(2, 4, 2, 4));
+				tab.addMouseListener(new MouseAdapter()
 				{
-					activeWindow = tw;
-					updateTabHighlight();
-					if (onTimeframeChange != null)
+					@Override
+					public void mouseClicked(MouseEvent e)
 					{
-						onTimeframeChange.accept(tw);
+						activeWindow = tw;
+						updateTabHighlight();
+						if (onTimeframeChange != null)
+						{
+							onTimeframeChange.accept(tw);
+						}
+						repaint();
 					}
-					repaint();
-				}
-			});
-			tabLabels.add(tab);
-			tabsBar.add(tab);
+				});
+				tabLabels.add(tab);
+				tabsBar.add(tab);
+			}
+			add(tabsBar, java.awt.BorderLayout.NORTH);
+			updateTabHighlight();
 		}
-		add(tabsBar, java.awt.BorderLayout.NORTH);
-		updateTabHighlight();
+		else
+		{
+			tabsBar = null;
+		}
 
 		addMouseMotionListener(new MouseMotionAdapter()
 		{
@@ -118,6 +133,10 @@ public class PriceGraphPanel extends JPanel
 
 	private void updateTabHighlight()
 	{
+		if (tabsBar == null)
+		{
+			return;
+		}
 		for (int i = 0; i < tabLabels.size(); i++)
 		{
 			JLabel l = tabLabels.get(i);
@@ -174,8 +193,8 @@ public class PriceGraphPanel extends JPanel
 			int w = getWidth();
 			int h = getHeight();
 
-			int plotTop = TAB_BAR_HEIGHT + TOP_PAD;
-			int plotBottom = h - BOTTOM_AXIS_HEIGHT - VOLUME_STRIP_HEIGHT - 4;
+			int plotTop = (mode == Mode.PRICE ? TAB_BAR_HEIGHT : 0) + TOP_PAD;
+			int plotBottom = h - BOTTOM_AXIS_HEIGHT;
 			int plotLeft = LEFT_PAD;
 			int plotRight = w - RIGHT_AXIS_WIDTH;
 			int plotW = Math.max(1, plotRight - plotLeft);
@@ -218,20 +237,84 @@ public class PriceGraphPanel extends JPanel
 			}
 			long range = Math.max(1, maxVal - minVal);
 
-			// Gridlines + right axis labels
 			g2.setStroke(new BasicStroke(1));
-			g2.setColor(GRID_COLOR);
 			g2.setFont(FontManager.getRunescapeSmallFont());
 			FontMetrics fm = g2.getFontMetrics();
+
+			// Gridlines + right axis labels (price = price ticks; volume = volume ticks)
+			long axisMax = mode == Mode.PRICE ? maxVal : maxVol;
+			long axisRange = mode == Mode.PRICE ? range : Math.max(1, maxVol);
 			int gridLines = 4;
 			for (int i = 0; i <= gridLines; i++)
 			{
 				int y = plotTop + (int) ((double) plotH * i / gridLines);
+				g2.setColor(GRID_COLOR);
 				g2.drawLine(plotLeft, y, plotRight, y);
-				long val = maxVal - (range * i / gridLines);
+				long val = axisMax - (axisRange * i / gridLines);
 				g2.setColor(Color.GRAY);
 				g2.drawString(abbreviate(val), plotRight + 4, y + fm.getAscent() / 2);
-				g2.setColor(GRID_COLOR);
+			}
+
+			if (mode == Mode.VOLUME)
+			{
+				if (maxVol > 0)
+				{
+					g2.setColor(VOLUME_COLOR);
+					int barW = Math.max(1, plotW / Math.max(1, points.size()));
+					for (WikiRealtimePriceClient.PricePoint p : points)
+					{
+						double tFrac = (double) (p.getTimestamp() - minTs) / (maxTs - minTs);
+						int x = plotLeft + (int) (tFrac * plotW);
+						long v = p.getHighPriceVolume() + p.getLowPriceVolume();
+						int barH = (int) ((double) v / maxVol * plotH);
+						g2.fillRect(x, plotBottom - barH, barW, barH);
+					}
+				}
+
+				// Bottom time-axis labels
+				g2.setColor(Color.GRAY);
+				SimpleDateFormat tf = new SimpleDateFormat("MMM d");
+				int labels = 4;
+				for (int i = 0; i <= labels; i++)
+				{
+					long ts = minTs + (maxTs - minTs) * i / labels;
+					String s = tf.format(new Date(ts * 1000L));
+					int x = plotLeft + plotW * i / labels;
+					g2.drawString(s, x - fm.stringWidth(s) / 2, plotBottom + 12);
+				}
+
+				// Crosshair + readout
+				if (hoverX >= plotLeft && hoverX <= plotRight)
+				{
+					g2.setColor(new Color(255, 255, 255, 120));
+					g2.setStroke(new BasicStroke(1));
+					g2.drawLine(hoverX, plotTop, hoverX, plotBottom);
+
+					WikiRealtimePriceClient.PricePoint closest = points.get(0);
+					int bestDx = Integer.MAX_VALUE;
+					for (WikiRealtimePriceClient.PricePoint p : points)
+					{
+						double tFrac = (double) (p.getTimestamp() - minTs) / (maxTs - minTs);
+						int x = plotLeft + (int) (tFrac * plotW);
+						int dx = Math.abs(x - hoverX);
+						if (dx < bestDx)
+						{
+							bestDx = dx;
+							closest = p;
+						}
+					}
+					String line = "V: " + abbreviate(closest.getHighPriceVolume() + closest.getLowPriceVolume());
+					int boxW = fm.stringWidth(line) + 8;
+					int boxH = fm.getHeight() + 4;
+					int bx = hoverX + 8;
+					if (bx + boxW > plotRight) bx = hoverX - 8 - boxW;
+					int by = plotTop + 4;
+					g2.setColor(new Color(20, 20, 20, 220));
+					g2.fillRoundRect(bx, by, boxW, boxH, 6, 6);
+					g2.setColor(Color.WHITE);
+					g2.drawString(line, bx + 4, by + fm.getAscent() + 2);
+				}
+				return;
 			}
 
 			Path2D highPath = new Path2D.Double();
@@ -322,25 +405,6 @@ public class PriceGraphPanel extends JPanel
 				g2.drawString(s, x - fm.stringWidth(s) / 2, plotBottom + 12);
 			}
 
-			// Volume strip
-			int volTop = plotBottom + BOTTOM_AXIS_HEIGHT;
-			int volBottom = volTop + VOLUME_STRIP_HEIGHT;
-			g2.setColor(GRID_COLOR);
-			g2.drawLine(plotLeft, volBottom, plotRight, volBottom);
-			if (maxVol > 0)
-			{
-				g2.setColor(VOLUME_COLOR);
-				int barW = Math.max(1, plotW / Math.max(1, points.size()));
-				for (WikiRealtimePriceClient.PricePoint p : points)
-				{
-					double tFrac = (double) (p.getTimestamp() - minTs) / (maxTs - minTs);
-					int x = plotLeft + (int) (tFrac * plotW);
-					long v = p.getHighPriceVolume() + p.getLowPriceVolume();
-					int barH = (int) ((double) v / maxVol * VOLUME_STRIP_HEIGHT);
-					g2.fillRect(x, volBottom - barH, barW, barH);
-				}
-			}
-
 			// Crosshair + readout
 			if (hoverX >= plotLeft && hoverX <= plotRight && !points.isEmpty())
 			{
@@ -365,7 +429,6 @@ public class PriceGraphPanel extends JPanel
 						"H: " + abbreviate(closest.getAvgHighPrice()),
 						"L: " + abbreviate(closest.getAvgLowPrice()),
 						"A: " + abbreviate(midpoint(closest)),
-						"V: " + abbreviate(closest.getHighPriceVolume() + closest.getLowPriceVolume())
 				};
 				int boxW = 0;
 				for (String s : lines) boxW = Math.max(boxW, fm.stringWidth(s));

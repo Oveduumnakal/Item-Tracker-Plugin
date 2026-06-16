@@ -113,6 +113,7 @@ public class ItemTrackerPanel extends PluginPanel
 	private JPanel acquisitionsSection;
 	private JPanel breakdownGrid;
 	private PriceGraphPanel priceGraph;
+	private PriceGraphPanel volumeGraph;
 	private final Map<TimeWindow, JLabel[]> breakdownLabels = new EnumMap<>(TimeWindow.class);
 	private static final TimeWindow[] BREAKDOWN_WINDOWS = {
 			TimeWindow.H1, TimeWindow.H3, TimeWindow.H6, TimeWindow.H12,
@@ -1338,15 +1339,26 @@ public class ItemTrackerPanel extends PluginPanel
 		topStack.add(buildBreakdownGrid());
 
 		topStack.add(buildDetailSectionTitle("Price graph", true));
-		priceGraph = new PriceGraphPanel();
+		priceGraph = new PriceGraphPanel(PriceGraphPanel.Mode.PRICE);
 		priceGraph.setAlignmentX(Component.LEFT_ALIGNMENT);
 		priceGraph.setOnTimeframeChange(window -> {
+			if (volumeGraph != null)
+			{
+				volumeGraph.setActiveWindow(window);
+			}
 			if (detailItemId > 0 && onRequestSeries != null)
 			{
 				onRequestSeries.accept(detailItemId, window);
 			}
 		});
 		topStack.add(priceGraph);
+
+		topStack.add(Box.createVerticalStrut(4));
+
+		topStack.add(buildDetailSectionTitle("Volume graph", true));
+		volumeGraph = new PriceGraphPanel(PriceGraphPanel.Mode.VOLUME);
+		volumeGraph.setAlignmentX(Component.LEFT_ALIGNMENT);
+		topStack.add(volumeGraph);
 
 		detailCard.add(topStack, BorderLayout.NORTH);
 
@@ -1579,6 +1591,10 @@ public class ItemTrackerPanel extends PluginPanel
 			return;
 		}
 		priceGraph.setData(points, currentPrice);
+		if (volumeGraph != null)
+		{
+			volumeGraph.setData(points, currentPrice);
+		}
 	}
 
 	private JPanel buildPriceBlock(JLabel highLabel, JLabel lowLabel, JLabel avgLabel)
@@ -1756,6 +1772,10 @@ public class ItemTrackerPanel extends PluginPanel
 		if (priceGraph != null)
 		{
 			priceGraph.setData(item.getDetailSeries(), item.getAvgPrice());
+		}
+		if (volumeGraph != null)
+		{
+			volumeGraph.setData(item.getDetailSeries(), item.getAvgPrice());
 		}
 	}
 
