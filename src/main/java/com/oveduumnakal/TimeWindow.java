@@ -9,7 +9,7 @@ import java.time.Duration;
 public enum TimeWindow
 {
 	NONE("None", Duration.ZERO, "5m"),
-	LIVE("Live", Duration.ZERO, "5m"),
+	LIVE("Ltst", Duration.ZERO, "5m"),
 	H1("1h", Duration.ofHours(1), "5m"),
 	H3("3h", Duration.ofHours(3), "5m"),
 	H6("6h", Duration.ofHours(6), "5m"),
@@ -17,6 +17,8 @@ public enum TimeWindow
 	H24("24h", Duration.ofHours(24), "5m"),
 	WEEK("1w", Duration.ofDays(7), "6h"),
 	MONTH("1mo", Duration.ofDays(30), "6h"),
+	MONTH3("3mo", Duration.ofDays(90), "24h"),
+	MONTH6("6mo", Duration.ofDays(180), "24h"),
 	YEAR("1y", Duration.ofDays(365), "24h");
 
 	private final String label;

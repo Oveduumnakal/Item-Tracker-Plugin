@@ -174,6 +174,13 @@ public class ItemTrackerPlugin extends Plugin
 	private ScheduledFuture<?> priceRefreshTask;
 	private Instant lastPriceRefresh = null;
 
+	// Item IDs for alchemy rune cost calculations.
+	private static final int NATURE_RUNE_ID = 561;
+	private static final int FIRE_RUNE_ID = 554;
+
+	// Static item metadata (buy limit, alch values) from the Wiki /mapping endpoint.
+	private volatile Map<Integer, WikiRealtimePriceClient.ItemMapping> itemMappings = Collections.emptyMap();
+
 	private boolean valueThresholdNotified = false;
 
 	private boolean valueThresholdPrimed = false;
@@ -190,7 +197,8 @@ public class ItemTrackerPlugin extends Plugin
 				this::addTrackedItem,
 				this::removeTrackedItem,
 				this::onAcquisitionsEdited,
-				this::requestSeries
+				this::requestDetailData,
+				this::clearAcquisitions
 		);
 
 		final BufferedImage icon = ImageUtil.loadImageResource(getClass(), "icon.png");
@@ -206,7 +214,17 @@ public class ItemTrackerPlugin extends Plugin
 		overlayManager.add(highlightOverlay);
 		overlayManager.add(groundOverlay);
 		clientThread.invokeLater(this::loadPersistedItems);
+		executor.execute(this::fetchItemMappings);
 		scheduleRefresh();
+	}
+
+	private void fetchItemMappings()
+	{
+		Map<Integer, WikiRealtimePriceClient.ItemMapping> mappings = wikiPriceClient.fetchMapping();
+		if (!mappings.isEmpty())
+		{
+			itemMappings = mappings;
+		}
 	}
 
 	@Override
@@ -366,17 +384,15 @@ public class ItemTrackerPlugin extends Plugin
 		});
 	}
 
-	private void requestSeries(int itemId, TimeWindow window)
-	{
-		requestSeries(itemId, window, true);
-	}
-
+	/**
+	 * Lightweight periodic fetch used to keep the main panel's per-window
+	 * stats (including 24h volume) current. Only the 5m resolution is pulled.
+	 */
 	private void requestSeries(int itemId, TimeWindow window, boolean refreshAfter)
 	{
-		final String timestep = (window == null ? TimeWindow.H24 : window).getTimestep();
 		executor.execute(() ->
 		{
-			List<WikiRealtimePriceClient.PricePoint> points = wikiPriceClient.fetchTimeseries(itemId, timestep);
+			List<WikiRealtimePriceClient.PricePoint> points = wikiPriceClient.fetchTimeseries(itemId, "5m");
 			clientThread.invokeLater(() ->
 			{
 				TrackedItem tracked = trackedItems.get(itemId);
@@ -384,34 +400,126 @@ public class ItemTrackerPlugin extends Plugin
 				{
 					return;
 				}
-				tracked.setDetailSeries(points);
-
-				// Compute window stats for all configured + breakdown windows
-				Map<TimeWindow, PriceStats> stats = new java.util.EnumMap<>(TimeWindow.class);
-				for (TimeWindow w : TimeWindow.values())
-				{
-					if (w == TimeWindow.NONE)
-					{
-						continue;
-					}
-					if (w == TimeWindow.LIVE)
-					{
-						stats.put(w, new PriceStats(tracked.getHighPrice(), tracked.getLowPrice(), tracked.getAvgPrice(), 0));
-					}
-					else
-					{
-						stats.put(w, WikiRealtimePriceClient.computeStats(points, w));
-					}
-				}
-				tracked.setWindowStats(stats);
-
-				final long live = tracked.getAvgPrice();
-				SwingUtilities.invokeLater(() -> panel.updateDetailGraph(itemId, points, live));
+				tracked.setSeries5m(points);
+				recomputeWindowStats(tracked);
 				if (refreshAfter)
 				{
 					refreshPanel();
 				}
 			});
+		});
+	}
+
+	/**
+	 * Heavyweight fetch for the detailed view: pulls all three timeseries
+	 * resolutions (5m, 6h, 24h) and item metadata so the graphs, price
+	 * overview, market info and alch sections can all be populated without
+	 * re-fetching when the user switches graph timeframes.
+	 */
+	private void requestDetailData(int itemId)
+	{
+		executor.execute(() ->
+		{
+			List<WikiRealtimePriceClient.PricePoint> s5 = wikiPriceClient.fetchTimeseries(itemId, "5m");
+			List<WikiRealtimePriceClient.PricePoint> s1h = wikiPriceClient.fetchTimeseries(itemId, "1h");
+			List<WikiRealtimePriceClient.PricePoint> s6 = wikiPriceClient.fetchTimeseries(itemId, "6h");
+			List<WikiRealtimePriceClient.PricePoint> s24 = wikiPriceClient.fetchTimeseries(itemId, "24h");
+			clientThread.invokeLater(() ->
+			{
+				TrackedItem tracked = trackedItems.get(itemId);
+				if (tracked == null)
+				{
+					return;
+				}
+				tracked.setSeries5m(s5);
+				tracked.setSeries1h(s1h);
+				tracked.setSeries6h(s6);
+				tracked.setSeries24h(s24);
+				applyItemMetadata(tracked);
+				recomputeWindowStats(tracked);
+
+				final long nature = runePrice(NATURE_RUNE_ID);
+				final long fire = runePrice(FIRE_RUNE_ID);
+				SwingUtilities.invokeLater(() ->
+				{
+					panel.setAlchRunePrices(nature, fire);
+					panel.refreshDetailData(itemId);
+				});
+				refreshPanel();
+			});
+		});
+	}
+
+	/**
+	 * Recomputes the per-window stats from whichever timeseries resolution
+	 * best covers each window. Must run on the client thread.
+	 */
+	private void recomputeWindowStats(TrackedItem tracked)
+	{
+		Map<TimeWindow, PriceStats> stats = new java.util.EnumMap<>(TimeWindow.class);
+		for (TimeWindow w : TimeWindow.values())
+		{
+			if (w == TimeWindow.NONE)
+			{
+				continue;
+			}
+			if (w == TimeWindow.LIVE)
+			{
+				stats.put(w, new PriceStats(tracked.getHighPrice(), tracked.getLowPrice(), tracked.getAvgPrice(), 0));
+			}
+			else
+			{
+				// Prefer the resolution that best covers the window, but fall back
+				// to the always-present 5m series until the detail view has fetched
+				// the coarser series so the main panel stays populated.
+				List<WikiRealtimePriceClient.PricePoint> series = tracked.getSeriesFor(w);
+				if (series.isEmpty())
+				{
+					series = tracked.getSeries5m();
+				}
+				stats.put(w, WikiRealtimePriceClient.computeStats(series, w));
+			}
+		}
+		tracked.setWindowStats(stats);
+	}
+
+	private void applyItemMetadata(TrackedItem tracked)
+	{
+		WikiRealtimePriceClient.ItemMapping mapping = itemMappings.get(tracked.getItemId());
+		if (mapping == null)
+		{
+			return;
+		}
+		tracked.setBuyLimit(mapping.getLimit());
+		tracked.setGeValue(mapping.getValue());
+		tracked.setHighAlch(mapping.getHighAlch());
+		tracked.setLowAlch(mapping.getLowAlch());
+		tracked.setMetadataLoaded(true);
+	}
+
+	private long runePrice(int itemId)
+	{
+		TrackedItem tracked = trackedItems.get(itemId);
+		if (tracked != null && tracked.getAvgPrice() > 0)
+		{
+			return tracked.getAvgPrice();
+		}
+		// Fall back to the item manager's cached GE price when the rune isn't tracked.
+		return Math.max(0, itemManager.getItemPrice(itemId));
+	}
+
+	private void clearAcquisitions(int itemId)
+	{
+		clientThread.invokeLater(() ->
+		{
+			TrackedItem tracked = trackedItems.get(itemId);
+			if (tracked == null)
+			{
+				return;
+			}
+			tracked.getAcquisitions().clear();
+			persistTrackedItems();
+			refreshPanel();
 		});
 	}
 
@@ -476,11 +584,21 @@ public class ItemTrackerPlugin extends Plugin
 		lastPriceRefresh = Instant.now();
 		refreshPanel(true);
 
+		final int detailId = panel.getDetailItemId();
 		for (TrackedItem item : trackedItems.values())
 		{
 			if (item.isTradeable() && item.hasPrices())
 			{
-				requestSeries(item.getItemId(), TimeWindow.H24, false);
+				// The open detail item gets the full multi-resolution refresh;
+				// everything else just refreshes the cheap 5m stats.
+				if (item.getItemId() == detailId)
+				{
+					requestDetailData(item.getItemId());
+				}
+				else
+				{
+					requestSeries(item.getItemId(), TimeWindow.H24, false);
+				}
 			}
 		}
 	}

@@ -34,6 +34,8 @@ public class WikiRealtimePriceClient
 			"https://prices.runescape.wiki/api/v1/osrs/latest");
 	private static final String TIMESERIES_URL =
 			"https://prices.runescape.wiki/api/v1/osrs/timeseries";
+	private static final HttpUrl MAPPING_URL = HttpUrl.parse(
+			"https://prices.runescape.wiki/api/v1/osrs/mapping");
 
 	private static final String USER_AGENT = "RuneLite ItemTracker Plugin";
 
@@ -63,6 +65,15 @@ public class WikiRealtimePriceClient
 		private long avgLowPrice;
 		private long highPriceVolume;
 		private long lowPriceVolume;
+	}
+
+	@Value
+	public static class ItemMapping
+	{
+		int limit;
+		long value;
+		long highAlch;
+		long lowAlch;
 	}
 
 	private final OkHttpClient httpClient;
@@ -120,6 +131,58 @@ public class WikiRealtimePriceClient
 		catch (IOException | JsonParseException e)
 		{
 			log.warn("Error fetching wiki prices", e);
+			return Collections.emptyMap();
+		}
+	}
+
+	public Map<Integer, ItemMapping> fetchMapping()
+	{
+		Request request = new Request.Builder()
+				.url(MAPPING_URL)
+				.header("User-Agent", USER_AGENT)
+				.build();
+
+		try (Response response = httpClient.newCall(request).execute())
+		{
+			if (!response.isSuccessful() || response.body() == null)
+			{
+				log.warn("Wiki mapping fetch failed: {}", response.code());
+				return Collections.emptyMap();
+			}
+
+			JsonArray data = gson.fromJson(response.body().charStream(), JsonArray.class);
+			if (data == null)
+			{
+				return Collections.emptyMap();
+			}
+
+			Map<Integer, ItemMapping> result = new HashMap<>(data.size());
+			for (JsonElement el : data)
+			{
+				try
+				{
+					JsonObject obj = el.getAsJsonObject();
+					if (!obj.has("id") || obj.get("id").isJsonNull())
+					{
+						continue;
+					}
+					int id = obj.get("id").getAsInt();
+					int limit = (int) readLong(obj, "limit");
+					long value = readLong(obj, "value");
+					long highAlch = readLong(obj, "highalch");
+					long lowAlch = readLong(obj, "lowalch");
+					result.put(id, new ItemMapping(limit, value, highAlch, lowAlch));
+				}
+				catch (IllegalStateException | NumberFormatException e)
+				{
+					// skip malformed entries
+				}
+			}
+			return result;
+		}
+		catch (IOException | JsonParseException e)
+		{
+			log.warn("Error fetching wiki mapping", e);
 			return Collections.emptyMap();
 		}
 	}

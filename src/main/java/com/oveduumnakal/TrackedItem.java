@@ -38,7 +38,40 @@ public class TrackedItem
 
 	private TrackItemMode mode = TrackItemMode.TRACK;
 	private Map<TimeWindow, PriceStats> windowStats = new EnumMap<>(TimeWindow.class);
-	private transient List<WikiRealtimePriceClient.PricePoint> detailSeries = new ArrayList<>();
+
+	// Timeseries at the Wiki resolutions, used by the detailed view.
+	private transient List<WikiRealtimePriceClient.PricePoint> series5m = new ArrayList<>();
+	private transient List<WikiRealtimePriceClient.PricePoint> series1h = new ArrayList<>();
+	private transient List<WikiRealtimePriceClient.PricePoint> series6h = new ArrayList<>();
+	private transient List<WikiRealtimePriceClient.PricePoint> series24h = new ArrayList<>();
+
+	// Static item metadata sourced from the Wiki /mapping endpoint.
+	private int buyLimit;
+	private long geValue;
+	private long highAlch;
+	private long lowAlch;
+	private boolean metadataLoaded;
+
+	/**
+	 * Returns the timeseries resolution best suited to the given window.
+	 * Short windows use 5m data, week/month use 6h, year uses 24h.
+	 */
+	public List<WikiRealtimePriceClient.PricePoint> getSeriesFor(TimeWindow window)
+	{
+		switch (window)
+		{
+			case WEEK:
+				return series1h;
+			case MONTH:
+				return series6h;
+			case MONTH3:
+			case MONTH6:
+			case YEAR:
+				return series24h;
+			default:
+				return series5m;
+		}
+	}
 
 	public long getHighValue()
 	{

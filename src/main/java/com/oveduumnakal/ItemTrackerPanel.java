@@ -42,6 +42,7 @@ import javax.swing.event.DocumentListener;
 import javax.swing.event.TableModelEvent;
 import javax.swing.table.AbstractTableModel;
 import javax.swing.table.DefaultTableCellRenderer;
+import javax.swing.table.JTableHeader;
 import javax.swing.table.TableCellRenderer;
 import java.awt.*;
 import java.awt.image.BufferedImage;
@@ -50,6 +51,7 @@ import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseListener;
+import java.awt.event.MouseMotionAdapter;
 import java.text.NumberFormat;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -82,7 +84,8 @@ public class ItemTrackerPanel extends PluginPanel
 	private final BiConsumer<Integer, TrackItemMode> onAddItem;
 	private final Consumer<Integer> onRemoveItem;
 	private final Consumer<Integer> onAcquisitionsEdited;
-	private final BiConsumer<Integer, TimeWindow> onRequestSeries;
+	private final Consumer<Integer> onRequestDetailData;
+	private final Consumer<Integer> onClearAcquisitions;
 
 	private final CardLayout cardLayout = new CardLayout();
 	private final JPanel cardsHost = new JPanel(cardLayout);
@@ -97,22 +100,55 @@ public class ItemTrackerPanel extends PluginPanel
 	private final JLabel detailIconLabel = new JLabel();
 	private final JLabel detailNameLabel = new JLabel();
 	private final JLabel detailQtyLabel = new JLabel();
-	private final JLabel detailEaHighLabel = new JLabel();
-	private final JLabel detailEaLowLabel = new JLabel();
-	private final JLabel detailEaAvgLabel = new JLabel();
-	private final JLabel detailTotalHighLabel = new JLabel();
-	private final JLabel detailTotalLowLabel = new JLabel();
-	private final JLabel detailTotalAvgLabel = new JLabel();
+
+	// Item current values section
+	private final JLabel icvHigh = new JLabel();
+	private final JLabel icvLow = new JLabel();
+	private final JLabel icvAvg = new JLabel();
+	private final JLabel icvVolume = new JLabel();
+
+	// Collection current values section
+	private JPanel ccvSection;
+	private final JLabel ccvHigh = new JLabel();
+	private final JLabel ccvLow = new JLabel();
+	private final JLabel ccvAvg = new JLabel();
+	private final JLabel ccvQuantity = new JLabel();
+	private final JLabel ccvProfit = new JLabel();
+
+	// Market info section
+	private final JLabel miBuyLimit = new JLabel();
+	private final JLabel miGeTax = new JLabel();
+	private final JLabel miVolatility = new JLabel();
+	private final JLabel miLiquidity = new JLabel();
+	private PriceRangeBar priceRangeBar;
+	private final JLabel rangePositionLabel = new JLabel();
+
+	// Alch section
+	private final JLabel haValue = new JLabel();
+	private final JLabel haProfit = new JLabel();
+	private final JLabel laValue = new JLabel();
+	private final JLabel laProfit = new JLabel();
+	private final JLabel alchEstProfit = new JLabel();
+	private JPanel alchEstProfitRow;
+
+	private long natureRunePrice;
+	private long fireRunePrice;
+
 	private AcquisitionsTableModel acquisitionsModel;
 	private JTable acquisitionsTable;
+	private int acqHoverRow = -1;
+	private int acqHoverCol = -1;
+	private JScrollPane acquisitionsScroll;
 	private JPanel acquisitionsSection;
-	private JPanel breakdownGrid;
+	private JPanel overviewGrid;
 	private PriceGraphPanel priceGraph;
 	private PriceGraphPanel volumeGraph;
-	private final Map<TimeWindow, JLabel[]> breakdownLabels = new EnumMap<>(TimeWindow.class);
-	private static final TimeWindow[] BREAKDOWN_WINDOWS = {
-			TimeWindow.H1, TimeWindow.H3, TimeWindow.H6, TimeWindow.H12,
-			TimeWindow.H24, TimeWindow.WEEK, TimeWindow.MONTH, TimeWindow.YEAR
+	private final Map<TimeWindow, JLabel[]> overviewLabels = new EnumMap<>(TimeWindow.class);
+	private final List<JLabel> overviewWindowLabels = new ArrayList<>();
+	private static final TimeWindow[] OVERVIEW_WINDOWS = {
+			TimeWindow.LIVE, TimeWindow.H1, TimeWindow.H3, TimeWindow.H6, TimeWindow.H12,
+			TimeWindow.H24, TimeWindow.WEEK, TimeWindow.MONTH, TimeWindow.MONTH3,
+			TimeWindow.MONTH6, TimeWindow.YEAR
 	};
 	private final IconTextField searchField;
 	private final JPanel searchResultsPanel;
@@ -125,6 +161,7 @@ public class ItemTrackerPanel extends PluginPanel
 	private EstimatesPosition currentEstimatesPosition;
 
 	private static final Color DIVIDER_COLOR = new Color(80, 80, 80);
+	private static final Color OVERVIEW_ROW_DIVIDER = new Color(45, 45, 45);
 	private static final javax.swing.border.Border TITLE_BORDER_WITH_TOP_DIVIDER =
 			BorderFactory.createCompoundBorder(
 					BorderFactory.createCompoundBorder(
@@ -190,14 +227,16 @@ public class ItemTrackerPanel extends PluginPanel
 			BiConsumer<Integer, TrackItemMode> onAddItem,
 			Consumer<Integer> onRemoveItem,
 			Consumer<Integer> onAcquisitionsEdited,
-			BiConsumer<Integer, TimeWindow> onRequestSeries)
+			Consumer<Integer> onRequestDetailData,
+			Consumer<Integer> onClearAcquisitions)
 	{
 		this.itemManager = itemManager;
 		this.config = config;
 		this.onAddItem = onAddItem;
 		this.onRemoveItem = onRemoveItem;
 		this.onAcquisitionsEdited = onAcquisitionsEdited;
-		this.onRequestSeries = onRequestSeries;
+		this.onRequestDetailData = onRequestDetailData;
+		this.onClearAcquisitions = onClearAcquisitions;
 
 		setLayout(new BorderLayout(0, 8));
 		setBorder(new EmptyBorder(10, 10, 10, 10));
@@ -1299,6 +1338,56 @@ public class ItemTrackerPanel extends PluginPanel
 		return sign + NUMBER_FORMAT.format(abs);
 	}
 
+	/**
+	 * Short format capped to 3 significant figures: 234K, 23.4K, 2.34K, 1.2M …
+	 * (never a 4-digit mantissa like 234.5K). Trailing zeros are dropped.
+	 */
+	private static String formatShort3Sig(long value)
+	{
+		long abs = Math.abs(value);
+		String sign = value < 0 ? "-" : "";
+		if (abs >= 1_000_000_000L)
+		{
+			return sign + sig3(abs / 1_000_000_000.0) + "B";
+		}
+		else if (abs >= 1_000_000L)
+		{
+			return sign + sig3(abs / 1_000_000.0) + "M";
+		}
+		else if (abs >= 1_000L)
+		{
+			return sign + sig3(abs / 1_000.0) + "K";
+		}
+		return sign + NUMBER_FORMAT.format(abs);
+	}
+
+	/** Formats a value in [1, 1000) to 3 significant figures, dropping trailing zeros. */
+	private static String sig3(double d)
+	{
+		String s;
+		if (d >= 100)
+		{
+			s = String.format(Locale.US, "%.0f", d);
+		}
+		else if (d >= 10)
+		{
+			s = String.format(Locale.US, "%.1f", d);
+		}
+		else
+		{
+			s = String.format(Locale.US, "%.2f", d);
+		}
+		if (s.contains("."))
+		{
+			s = s.replaceAll("0+$", "");
+			if (s.endsWith("."))
+			{
+				s = s.substring(0, s.length() - 1);
+			}
+		}
+		return s;
+	}
+
 	private static String formatTotalGp(long value, ValueFormat fmt)
 	{
 		if (fmt == ValueFormat.FULL)
@@ -1350,12 +1439,23 @@ public class ItemTrackerPanel extends PluginPanel
 		headerRow.add(backBtn, BorderLayout.WEST);
 
 		detailIconLabel.setPreferredSize(new Dimension(32, 32));
+		detailIconLabel.setVerticalAlignment(SwingConstants.CENTER);
 		detailNameLabel.setForeground(Color.WHITE);
 		detailNameLabel.setFont(FontManager.getRunescapeBoldFont());
-		detailQtyLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		detailQtyLabel.setForeground(Color.WHITE);
 		detailQtyLabel.setFont(FontManager.getRunescapeSmallFont());
 
-		JPanel titleRow = new JPanel()
+		// Title: icon on the left, name over Qty stacked to its right.
+		JPanel titleTextStack = new JPanel();
+		titleTextStack.setLayout(new BoxLayout(titleTextStack, BoxLayout.Y_AXIS));
+		titleTextStack.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		detailNameLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+		detailQtyLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+		titleTextStack.add(detailNameLabel);
+		titleTextStack.add(Box.createVerticalStrut(2));
+		titleTextStack.add(detailQtyLabel);
+
+		JPanel titleRow = new JPanel(new BorderLayout(8, 0))
 		{
 			@Override
 			public Dimension getMaximumSize()
@@ -1363,56 +1463,49 @@ public class ItemTrackerPanel extends PluginPanel
 				return new Dimension(Integer.MAX_VALUE, getPreferredSize().height);
 			}
 		};
-		titleRow.setLayout(new BoxLayout(titleRow, BoxLayout.X_AXIS));
 		titleRow.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		titleRow.setBorder(new EmptyBorder(16, 0, 0, 0));
 		titleRow.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-		detailIconLabel.setAlignmentY(Component.CENTER_ALIGNMENT);
-		detailNameLabel.setAlignmentY(Component.CENTER_ALIGNMENT);
-		detailQtyLabel.setAlignmentY(Component.CENTER_ALIGNMENT);
-
-		titleRow.add(detailIconLabel);
-		titleRow.add(Box.createHorizontalStrut(8));
-		titleRow.add(detailNameLabel);
-		titleRow.add(Box.createHorizontalStrut(8));
-		titleRow.add(detailQtyLabel);
-		titleRow.add(Box.createHorizontalGlue());
+		titleRow.add(detailIconLabel, BorderLayout.WEST);
+		titleRow.add(titleTextStack, BorderLayout.CENTER);
 
 		JPanel topStack = new JPanel();
 		topStack.setLayout(new BoxLayout(topStack, BoxLayout.Y_AXIS));
 		topStack.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		topStack.add(headerRow);
 		topStack.add(titleRow);
-		topStack.add(buildDetailSectionTitle("Price per item", true));
-		topStack.add(buildPriceBlock(detailEaHighLabel, detailEaLowLabel, detailEaAvgLabel));
-		topStack.add(buildDetailSectionTitle("Total value", false));
-		topStack.add(buildPriceBlock(detailTotalHighLabel, detailTotalLowLabel, detailTotalAvgLabel));
 
-		topStack.add(buildDetailSectionTitle("Price breakdown", true));
-		topStack.add(buildBreakdownGrid());
+		topStack.add(buildDetailSectionTitle("Item Current Values", true));
+		topStack.add(buildCurrentValuesBlock(icvHigh, icvLow, icvAvg, icvVolume, null));
 
-		topStack.add(buildDetailSectionTitle("Price graph", true));
+		ccvSection = new JPanel();
+		ccvSection.setLayout(new BoxLayout(ccvSection, BoxLayout.Y_AXIS));
+		ccvSection.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		ccvSection.setAlignmentX(Component.LEFT_ALIGNMENT);
+		ccvSection.add(buildDetailSectionTitle("Collection Current Values", true));
+		ccvSection.add(buildCurrentValuesBlock(ccvHigh, ccvLow, ccvAvg, ccvQuantity, ccvProfit));
+		topStack.add(ccvSection);
+
+		topStack.add(buildDetailSectionTitle("Price Overview", true));
+		topStack.add(buildOverviewGrid());
+
+		topStack.add(buildDetailSectionTitle("Price Graph", true));
 		priceGraph = new PriceGraphPanel(PriceGraphPanel.Mode.PRICE);
 		priceGraph.setAlignmentX(Component.LEFT_ALIGNMENT);
-		priceGraph.setOnTimeframeChange(window -> {
-			if (volumeGraph != null)
-			{
-				volumeGraph.setActiveWindow(window);
-			}
-			if (detailItemId > 0 && onRequestSeries != null)
-			{
-				onRequestSeries.accept(detailItemId, window);
-			}
-		});
 		topStack.add(priceGraph);
 
 		topStack.add(Box.createVerticalStrut(4));
 
-		topStack.add(buildDetailSectionTitle("Volume graph", true));
+		topStack.add(buildDetailSectionTitle("Volume Graph", true));
 		volumeGraph = new PriceGraphPanel(PriceGraphPanel.Mode.VOLUME);
 		volumeGraph.setAlignmentX(Component.LEFT_ALIGNMENT);
 		topStack.add(volumeGraph);
+
+		topStack.add(buildDetailSectionTitle("Market Info", true));
+		topStack.add(buildMarketInfoBlock());
+
+		topStack.add(buildDetailSectionTitle("Alchemy Info", true));
+		topStack.add(buildAlchBlock());
 
 		detailCard.add(topStack, BorderLayout.NORTH);
 
@@ -1422,11 +1515,63 @@ public class ItemTrackerPanel extends PluginPanel
 			@Override
 			public Dimension getPreferredScrollableViewportSize()
 			{
-				int visibleRows = Math.max(5, getRowCount() + 1);
+				int visibleRows = Math.min(10, Math.max(5, getRowCount() + 1));
 				Dimension prefBody = super.getPreferredScrollableViewportSize();
 				return new Dimension(prefBody.width, visibleRows * getRowHeight());
 			}
+
+			@Override
+			public String getToolTipText(MouseEvent e)
+			{
+				int row = rowAtPoint(e.getPoint());
+				int col = columnAtPoint(e.getPoint());
+				if (row < 0 || col < 0)
+				{
+					return null;
+				}
+				Object val = getValueAt(row, col);
+				if (!(val instanceof Number))
+				{
+					return null;
+				}
+				long v = ((Number) val).longValue();
+				// Only the short-form (overflowing) cells carry a full-value tooltip.
+				if (Math.abs(v) < (col == 3 ? 1000 : 10000))
+				{
+					return null;
+				}
+				return acqTooltipLabel(col) + ": " + NUMBER_FORMAT.format(v);
+			}
+
+			@Override
+			protected JTableHeader createDefaultTableHeader()
+			{
+				return new JTableHeader(columnModel)
+				{
+					@Override
+					public String getToolTipText(MouseEvent e)
+					{
+						int col = columnAtPoint(e.getPoint());
+						return col < 0 ? null : acqTooltipLabel(convertColumnIndexToModel(col));
+					}
+				};
+			}
 		};
+		acquisitionsTable.addMouseMotionListener(new MouseMotionAdapter()
+		{
+			@Override
+			public void mouseMoved(MouseEvent e)
+			{
+				int r = acquisitionsTable.rowAtPoint(e.getPoint());
+				int c = acquisitionsTable.columnAtPoint(e.getPoint());
+				if (r != acqHoverRow || c != acqHoverCol)
+				{
+					acqHoverRow = r;
+					acqHoverCol = c;
+					acquisitionsTable.repaint();
+				}
+			}
+		});
 		acquisitionsTable.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 		acquisitionsTable.setForeground(Color.WHITE);
 		acquisitionsTable.setGridColor(new Color(60, 60, 60));
@@ -1434,6 +1579,7 @@ public class ItemTrackerPanel extends PluginPanel
 		acquisitionsTable.setFillsViewportHeight(true);
 		acquisitionsTable.getTableHeader().setBackground(ColorScheme.DARKER_GRAY_COLOR);
 		acquisitionsTable.getTableHeader().setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		acquisitionsTable.getTableHeader().setFont(FontManager.getRunescapeSmallFont());
 		applyTableRenderers();
 		TableCellRenderer headerRenderer = acquisitionsTable.getTableHeader().getDefaultRenderer();
 		if (headerRenderer instanceof DefaultTableCellRenderer)
@@ -1443,6 +1589,17 @@ public class ItemTrackerPanel extends PluginPanel
 
 		acquisitionsTable.addMouseListener(new MouseAdapter()
 		{
+			@Override
+			public void mouseExited(MouseEvent e)
+			{
+				if (acqHoverRow != -1 || acqHoverCol != -1)
+				{
+					acqHoverRow = -1;
+					acqHoverCol = -1;
+					acquisitionsTable.repaint();
+				}
+			}
+
 			@Override
 			public void mouseClicked(MouseEvent e)
 			{
@@ -1463,6 +1620,7 @@ public class ItemTrackerPanel extends PluginPanel
 				acquisitionsTable.revalidate();
 				onAcquisitionsEdited.accept(detailItemId);
 				int newRow = acquisitionsModel.getRowCount() - 1;
+				scrollAcquisitionsToBottom();
 				if (newRow >= 0 && acquisitionsTable.editCellAt(newRow, 0))
 				{
 					acquisitionsTable.changeSelection(newRow, 0, false, false);
@@ -1478,11 +1636,14 @@ public class ItemTrackerPanel extends PluginPanel
 		JScrollPane tableScroll = new JScrollPane(acquisitionsTable);
 		tableScroll.getViewport().setBackground(ColorScheme.DARKER_GRAY_COLOR);
 		tableScroll.setBorder(BorderFactory.createLineBorder(new Color(60, 60, 60)));
+		acquisitionsScroll = tableScroll;
 
 		JButton addRowBtn = new JButton("+ Add");
 		addRowBtn.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 		addRowBtn.setForeground(Color.WHITE);
 		addRowBtn.setFocusPainted(false);
+		addRowBtn.setFont(FontManager.getRunescapeSmallFont());
+		addRowBtn.setMargin(new Insets(2, 5, 2, 5));
 		addRowBtn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 		addRowBtn.addActionListener(e -> {
 			TrackedItem t = currentItems.get(detailItemId);
@@ -1492,12 +1653,15 @@ public class ItemTrackerPanel extends PluginPanel
 			acquisitionsModel.fireTableDataChanged();
 			acquisitionsTable.revalidate();
 			onAcquisitionsEdited.accept(detailItemId);
+			scrollAcquisitionsToBottom();
 		});
 
 		JButton removeRowBtn = new JButton("− Remove");
 		removeRowBtn.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 		removeRowBtn.setForeground(Color.WHITE);
 		removeRowBtn.setFocusPainted(false);
+		removeRowBtn.setFont(FontManager.getRunescapeSmallFont());
+		removeRowBtn.setMargin(new Insets(2, 5, 2, 5));
 		removeRowBtn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 		removeRowBtn.setEnabled(false);
 
@@ -1557,18 +1721,53 @@ public class ItemTrackerPanel extends PluginPanel
 			onAcquisitionsEdited.accept(detailItemId);
 		});
 
-		JPanel tableButtons = new JPanel();
-		tableButtons.setLayout(new BoxLayout(tableButtons, BoxLayout.X_AXIS));
+		JButton clearBtn = new JButton("Clear");
+		clearBtn.setToolTipText("Remove every row from the collection log");
+		clearBtn.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		clearBtn.setForeground(new Color(220, 100, 100));
+		clearBtn.setFocusPainted(false);
+		clearBtn.setFont(FontManager.getRunescapeSmallFont());
+		clearBtn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+		clearBtn.setMargin(new Insets(2, 5, 2, 5));
+		clearBtn.addActionListener(e -> {
+			TrackedItem t = currentItems.get(detailItemId);
+			if (t == null || t.getAcquisitions().isEmpty()) return;
+			int choice = JOptionPane.showConfirmDialog(
+					ItemTrackerPanel.this,
+					"Clear the entire collection log for this item?",
+					"Clear Collection Log",
+					JOptionPane.YES_NO_OPTION,
+					JOptionPane.WARNING_MESSAGE);
+			if (choice != JOptionPane.YES_OPTION) return;
+			if (acquisitionsTable.isEditing())
+			{
+				acquisitionsTable.getCellEditor().cancelCellEditing();
+			}
+			if (onClearAcquisitions != null)
+			{
+				onClearAcquisitions.accept(detailItemId);
+			}
+		});
+
+		// Give all four buttons a uniform height (the broom's icon otherwise makes it taller).
+		JButton[] logButtons = {addRowBtn, removeRowBtn, cleanBtn, clearBtn};
+		int btnHeight = 0;
+		for (JButton b : logButtons)
+		{
+			btnHeight = Math.max(btnHeight, b.getPreferredSize().height);
+		}
+		for (JButton b : logButtons)
+		{
+			b.setPreferredSize(new Dimension(b.getPreferredSize().width, btnHeight));
+		}
+
+		JPanel tableButtons = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
 		tableButtons.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		tableButtons.setBorder(new EmptyBorder(4, 0, 4, 0));
-		addRowBtn.setAlignmentY(Component.CENTER_ALIGNMENT);
-		removeRowBtn.setAlignmentY(Component.CENTER_ALIGNMENT);
-		cleanBtn.setAlignmentY(Component.CENTER_ALIGNMENT);
 		tableButtons.add(addRowBtn);
-		tableButtons.add(Box.createHorizontalGlue());
 		tableButtons.add(removeRowBtn);
-		tableButtons.add(Box.createHorizontalGlue());
 		tableButtons.add(cleanBtn);
+		tableButtons.add(clearBtn);
 
 		acquisitionsSection = new JPanel(new BorderLayout(0, 4));
 		acquisitionsSection.setBackground(ColorScheme.DARK_GRAY_COLOR);
@@ -1580,78 +1779,50 @@ public class ItemTrackerPanel extends PluginPanel
 		topStack.add(acquisitionsSection);
 	}
 
-	private JPanel buildBreakdownGrid()
+	public int getDetailItemId()
 	{
-		breakdownGrid = new JPanel(new GridBagLayout())
-		{
-			@Override
-			public Dimension getMaximumSize()
-			{
-				return new Dimension(Integer.MAX_VALUE, getPreferredSize().height);
-			}
-		};
-		breakdownGrid.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-		breakdownGrid.setBorder(new EmptyBorder(6, 8, 6, 8));
-		breakdownGrid.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-		GridBagConstraints c = new GridBagConstraints();
-		c.anchor = GridBagConstraints.WEST;
-		c.insets = new Insets(2, 4, 2, 4);
-		c.fill = GridBagConstraints.HORIZONTAL;
-
-		String[] headers = {"", "High", "Low", "Avg"};
-		Color[] headerColors = {ColorScheme.LIGHT_GRAY_COLOR, COLOR_HIGH, COLOR_LOW, COLOR_AVG};
-		for (int i = 0; i < headers.length; i++)
-		{
-			JLabel h = new JLabel(headers[i], SwingConstants.CENTER);
-			h.setForeground(headerColors[i]);
-			h.setFont(FontManager.getRunescapeBoldFont());
-			c.gridx = i;
-			c.gridy = 0;
-			breakdownGrid.add(h, c);
-		}
-
-		int y = 1;
-		for (TimeWindow w : BREAKDOWN_WINDOWS)
-		{
-			JLabel windowLbl = new JLabel(w.toString());
-			windowLbl.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-			windowLbl.setFont(FontManager.getRunescapeSmallFont());
-			c.gridx = 0;
-			c.gridy = y;
-			breakdownGrid.add(windowLbl, c);
-
-			JLabel[] cells = new JLabel[3];
-			Color[] colors = {COLOR_HIGH, COLOR_LOW, COLOR_AVG};
-			for (int i = 0; i < 3; i++)
-			{
-				cells[i] = new JLabel("—", SwingConstants.CENTER);
-				cells[i].setForeground(colors[i]);
-				cells[i].setFont(FontManager.getRunescapeSmallFont());
-				c.gridx = i + 1;
-				c.gridy = y;
-				breakdownGrid.add(cells[i], c);
-			}
-			breakdownLabels.put(w, cells);
-			y++;
-		}
-		return breakdownGrid;
+		return detailItemId;
 	}
 
-	public void updateDetailGraph(int itemId, List<WikiRealtimePriceClient.PricePoint> points, long currentPrice)
+	public void setAlchRunePrices(long naturePrice, long firePrice)
 	{
-		if (detailItemId != itemId || priceGraph == null)
+		this.natureRunePrice = naturePrice;
+		this.fireRunePrice = firePrice;
+	}
+
+	/** Re-runs detail population when the given item is the one on screen. */
+	public void refreshDetailData(int itemId)
+	{
+		if (detailItemId != itemId)
 		{
 			return;
 		}
-		priceGraph.setData(points, currentPrice);
-		if (volumeGraph != null)
+		TrackedItem item = currentItems.get(itemId);
+		if (item != null)
 		{
-			volumeGraph.setData(points, currentPrice);
+			populateDetail(item);
 		}
 	}
 
-	private JPanel buildPriceBlock(JLabel highLabel, JLabel lowLabel, JLabel avgLabel)
+	private void scrollAcquisitionsToBottom()
+	{
+		if (acquisitionsScroll == null)
+		{
+			return;
+		}
+		SwingUtilities.invokeLater(() ->
+		{
+			JScrollBar bar = acquisitionsScroll.getVerticalScrollBar();
+			bar.setValue(bar.getMaximum());
+		});
+	}
+
+	/**
+	 * Builds a GE-Estimates-styled block of stacked "Label: value" rows.
+	 * The fourth row is grey (volume / quantity); when {@code profit} is
+	 * supplied it is appended below a divider, matching the GE Estimates view.
+	 */
+	private JPanel buildCurrentValuesBlock(JLabel high, JLabel low, JLabel avg, JLabel fourth, JLabel profit)
 	{
 		JPanel block = new JPanel()
 		{
@@ -1666,28 +1837,282 @@ public class ItemTrackerPanel extends PluginPanel
 		block.setBorder(new EmptyBorder(6, 8, 6, 8));
 		block.setAlignmentX(Component.LEFT_ALIGNMENT);
 
-		highLabel.setForeground(COLOR_HIGH);
-		highLabel.setFont(FontManager.getRunescapeSmallFont());
-		lowLabel.setForeground(COLOR_LOW);
-		lowLabel.setFont(FontManager.getRunescapeSmallFont());
-		avgLabel.setForeground(COLOR_AVG);
-		avgLabel.setFont(FontManager.getRunescapeSmallFont());
+		high.setForeground(COLOR_HIGH);
+		low.setForeground(COLOR_LOW);
+		avg.setForeground(COLOR_AVG);
+		fourth.setForeground(COLOR_VOLUME);
+		for (JLabel l : new JLabel[]{high, low, avg, fourth})
+		{
+			l.setFont(FontManager.getRunescapeSmallFont());
+			JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 3));
+			row.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+			row.add(l);
+			block.add(row);
+		}
 
-		JPanel highRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 3));
-		highRow.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-		highRow.add(highLabel);
+		if (profit != null)
+		{
+			profit.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+			profit.setFont(FontManager.getRunescapeSmallFont());
+			JPanel profitRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+			profitRow.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+			profitRow.add(profit);
+			profitRow.setBorder(BorderFactory.createCompoundBorder(
+					BorderFactory.createCompoundBorder(
+							new EmptyBorder(4, 0, 0, 0),
+							new MatteBorder(1, 0, 0, 0, new Color(80, 80, 80))),
+					new EmptyBorder(4, 0, 0, 0)));
+			block.add(profitRow);
+		}
+		return block;
+	}
 
-		JPanel lowRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 3));
-		lowRow.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-		lowRow.add(lowLabel);
+	private JPanel buildOverviewGrid()
+	{
+		overviewGrid = new JPanel(new GridBagLayout())
+		{
+			@Override
+			public Dimension getMaximumSize()
+			{
+				return new Dimension(Integer.MAX_VALUE, getPreferredSize().height);
+			}
 
-		JPanel avgRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 3));
-		avgRow.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-		avgRow.add(avgLabel);
+			@Override
+			protected void paintComponent(Graphics g)
+			{
+				super.paintComponent(g);
+				JLabel[] firstRow = overviewLabels.get(OVERVIEW_WINDOWS[0]);
+				if (firstRow == null || firstRow[0] == null)
+				{
+					return;
+				}
+				// Vertical separator 2px to the right of the label column.
+				int vx = firstRow[0].getX() - 3;
+				if (!overviewWindowLabels.isEmpty())
+				{
+					JLabel ref = overviewWindowLabels.get(0);
+					vx = ref.getX() + ref.getWidth() + 2;
+				}
+				g.setColor(DIVIDER_COLOR);
+				g.drawLine(vx, 4, vx, getHeight() - 4);
 
-		block.add(highRow);
-		block.add(lowRow);
-		block.add(avgRow);
+				// Fainter horizontal separators between each data row.
+				g.setColor(OVERVIEW_ROW_DIVIDER);
+				JLabel prev = null;
+				for (TimeWindow w : OVERVIEW_WINDOWS)
+				{
+					JLabel[] cells = overviewLabels.get(w);
+					if (cells == null || cells[0] == null)
+					{
+						continue;
+					}
+					JLabel cur = cells[0];
+					if (prev != null)
+					{
+						int y = (prev.getY() + prev.getHeight() + cur.getY()) / 2;
+						g.drawLine(2, y, getWidth() - 2, y);
+					}
+					prev = cur;
+				}
+			}
+		};
+		overviewGrid.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		overviewGrid.setBorder(new EmptyBorder(6, 3, 2, 3));
+		overviewGrid.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+		GridBagConstraints c = new GridBagConstraints();
+		c.insets = new Insets(2, 1, 2, 1);
+		c.fill = GridBagConstraints.HORIZONTAL;
+
+		String[] headers = {"", "High", "Low", "Avg", "Δ%", "Vol"};
+		Color[] headerColors = {
+				ColorScheme.LIGHT_GRAY_COLOR, COLOR_HIGH, COLOR_LOW, COLOR_AVG,
+				ColorScheme.LIGHT_GRAY_COLOR, COLOR_VOLUME};
+		for (int i = 0; i < headers.length; i++)
+		{
+			JLabel h = new JLabel(headers[i], SwingConstants.CENTER);
+			h.setForeground(headerColors[i]);
+			h.setFont(FontManager.getRunescapeSmallFont());
+			c.gridx = i;
+			c.gridy = 0;
+			c.weightx = i == 0 ? 0 : 1;
+			// Extra left inset on the High column leaves 1px between it and the separator.
+			c.insets = new Insets(2, i == 1 ? 3 : 1, 2, 1);
+			overviewGrid.add(h, c);
+		}
+
+		// 1px divider spanning the full width beneath the header row.
+		JPanel headerDivider = new JPanel();
+		headerDivider.setBackground(DIVIDER_COLOR);
+		headerDivider.setPreferredSize(new Dimension(0, 1));
+		headerDivider.setMinimumSize(new Dimension(0, 1));
+		GridBagConstraints dc = new GridBagConstraints();
+		dc.gridx = 0;
+		dc.gridy = 1;
+		dc.gridwidth = headers.length;
+		dc.weightx = 1;
+		dc.fill = GridBagConstraints.HORIZONTAL;
+		dc.insets = new Insets(1, 1, 2, 1);
+		overviewGrid.add(headerDivider, dc);
+
+		int y = 2;
+		Color[] cellColors = {COLOR_HIGH, COLOR_LOW, COLOR_AVG, COLOR_VOLUME, COLOR_VOLUME};
+		for (TimeWindow w : OVERVIEW_WINDOWS)
+		{
+			JLabel windowLbl = new JLabel(w == TimeWindow.LIVE ? "5m" : w.toString(), SwingConstants.RIGHT);
+			windowLbl.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+			windowLbl.setFont(FontManager.getRunescapeSmallFont());
+			c.gridx = 0;
+			c.gridy = y;
+			c.weightx = 0;
+			c.anchor = GridBagConstraints.EAST;
+			overviewGrid.add(windowLbl, c);
+			overviewWindowLabels.add(windowLbl);
+
+			JLabel[] cells = new JLabel[5];
+			for (int i = 0; i < 5; i++)
+			{
+				cells[i] = new JLabel("—", SwingConstants.CENTER);
+				cells[i].setForeground(cellColors[i]);
+				cells[i].setFont(FontManager.getRunescapeSmallFont());
+				c.gridx = i + 1;
+				c.gridy = y;
+				c.weightx = 1;
+				c.anchor = GridBagConstraints.CENTER;
+				c.insets = new Insets(2, i == 0 ? 3 : 1, 2, 1);
+				overviewGrid.add(cells[i], c);
+			}
+			overviewLabels.put(w, cells);
+			y++;
+		}
+		return overviewGrid;
+	}
+
+	private JPanel buildMarketInfoBlock()
+	{
+		JPanel block = new JPanel()
+		{
+			@Override
+			public Dimension getMaximumSize()
+			{
+				return new Dimension(Integer.MAX_VALUE, getPreferredSize().height);
+			}
+		};
+		block.setLayout(new BoxLayout(block, BoxLayout.Y_AXIS));
+		block.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		block.setBorder(new EmptyBorder(6, 8, 6, 8));
+		block.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+		miBuyLimit.setHorizontalAlignment(SwingConstants.CENTER);
+		miGeTax.setHorizontalAlignment(SwingConstants.CENTER);
+		miVolatility.setHorizontalAlignment(SwingConstants.CENTER);
+		miLiquidity.setHorizontalAlignment(SwingConstants.CENTER);
+
+		block.add(buildMarketInfoPair("Buy Limit", miBuyLimit, "GE Tax", miGeTax));
+		block.add(Box.createVerticalStrut(6));
+		block.add(buildMarketInfoPair("Volatility", miVolatility, "Liquidity", miLiquidity));
+
+		// Faint separator above the 30 Day Price Range sub-section.
+		block.add(Box.createVerticalStrut(8));
+		JPanel rangeSep = new JPanel();
+		rangeSep.setBackground(OVERVIEW_ROW_DIVIDER);
+		rangeSep.setAlignmentX(Component.LEFT_ALIGNMENT);
+		rangeSep.setPreferredSize(new Dimension(0, 1));
+		rangeSep.setMaximumSize(new Dimension(Integer.MAX_VALUE, 1));
+		block.add(rangeSep);
+		block.add(Box.createVerticalStrut(8));
+
+		JLabel rangeTitle = new JLabel("30 Day Price Range", SwingConstants.CENTER);
+		rangeTitle.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		rangeTitle.setFont(FontManager.getRunescapeSmallFont());
+		rangeTitle.setAlignmentX(Component.LEFT_ALIGNMENT);
+		rangeTitle.setMaximumSize(new Dimension(Integer.MAX_VALUE, rangeTitle.getPreferredSize().height));
+		block.add(rangeTitle);
+		block.add(Box.createVerticalStrut(4));
+
+		rangePositionLabel.setHorizontalAlignment(SwingConstants.CENTER);
+		rangePositionLabel.setFont(FontManager.getRunescapeSmallFont());
+		rangePositionLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+		rangePositionLabel.setMaximumSize(new Dimension(Integer.MAX_VALUE,
+				rangePositionLabel.getPreferredSize().height));
+		block.add(rangePositionLabel);
+		block.add(Box.createVerticalStrut(3));
+
+		priceRangeBar = new PriceRangeBar();
+		block.add(priceRangeBar);
+		return block;
+	}
+
+	private JPanel buildMarketInfoPair(String leftLabel, JLabel leftValue, String rightLabel, JLabel rightValue)
+	{
+		JPanel grid = new JPanel(new GridBagLayout());
+		grid.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		grid.setAlignmentX(Component.LEFT_ALIGNMENT);
+		GridBagConstraints c = new GridBagConstraints();
+		c.fill = GridBagConstraints.HORIZONTAL;
+		c.weightx = 1;
+		c.insets = new Insets(1, 4, 1, 4);
+
+		JLabel lh = new JLabel(leftLabel, SwingConstants.CENTER);
+		lh.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		lh.setFont(FontManager.getRunescapeSmallFont());
+		JLabel rh = new JLabel(rightLabel, SwingConstants.CENTER);
+		rh.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		rh.setFont(FontManager.getRunescapeSmallFont());
+
+		leftValue.setFont(FontManager.getRunescapeSmallFont());
+		leftValue.setForeground(Color.WHITE);
+		rightValue.setFont(FontManager.getRunescapeSmallFont());
+		rightValue.setForeground(Color.WHITE);
+
+		c.gridx = 0; c.gridy = 0; grid.add(lh, c);
+		c.gridx = 1; c.gridy = 0; grid.add(rh, c);
+		c.gridx = 0; c.gridy = 1; grid.add(leftValue, c);
+		c.gridx = 1; c.gridy = 1; grid.add(rightValue, c);
+		return grid;
+	}
+
+	private JPanel buildAlchBlock()
+	{
+		JPanel block = new JPanel()
+		{
+			@Override
+			public Dimension getMaximumSize()
+			{
+				return new Dimension(Integer.MAX_VALUE, getPreferredSize().height);
+			}
+		};
+		block.setLayout(new BoxLayout(block, BoxLayout.Y_AXIS));
+		block.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		block.setBorder(new EmptyBorder(6, 8, 6, 8));
+		block.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+		haValue.setHorizontalAlignment(SwingConstants.CENTER);
+		haProfit.setHorizontalAlignment(SwingConstants.CENTER);
+		laValue.setHorizontalAlignment(SwingConstants.CENTER);
+		laProfit.setHorizontalAlignment(SwingConstants.CENTER);
+
+		block.add(buildMarketInfoPair("High Alchemy Value", haValue, "Profit", haProfit));
+		block.add(Box.createVerticalStrut(6));
+		block.add(buildMarketInfoPair("Low Alchemy Value", laValue, "Profit", laProfit));
+
+		JLabel estPrefix = new JLabel("Est. Profit:");
+		estPrefix.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		estPrefix.setFont(FontManager.getRunescapeSmallFont());
+		alchEstProfit.setFont(FontManager.getRunescapeSmallFont());
+		alchEstProfit.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+
+		alchEstProfitRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+		alchEstProfitRow.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		alchEstProfitRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+		alchEstProfitRow.setBorder(BorderFactory.createCompoundBorder(
+				BorderFactory.createCompoundBorder(
+						new EmptyBorder(6, 0, 0, 0),
+						new MatteBorder(1, 0, 0, 0, new Color(80, 80, 80))),
+				new EmptyBorder(4, 0, 0, 0)));
+		alchEstProfitRow.add(estPrefix);
+		alchEstProfitRow.add(alchEstProfit);
+		block.add(alchEstProfitRow);
 		return block;
 	}
 
@@ -1712,11 +2137,11 @@ public class ItemTrackerPanel extends PluginPanel
 		try
 		{
 			BufferedImage img = net.runelite.client.util.ImageUtil.loadImageResource(getClass(), "broom.png");
-			return new ImageIcon(img);
+			return new ImageIcon(img.getScaledInstance(12, 12, Image.SCALE_SMOOTH));
 		}
 		catch (Exception ex)
 		{
-			return new ImageIcon(new BufferedImage(14, 14, BufferedImage.TYPE_INT_ARGB));
+			return new ImageIcon(new BufferedImage(12, 12, BufferedImage.TYPE_INT_ARGB));
 		}
 	}
 
@@ -1757,9 +2182,9 @@ public class ItemTrackerPanel extends PluginPanel
 		detailItemId = itemId;
 		populateDetail(item);
 		cardLayout.show(cardsHost, CARD_DETAIL);
-		if (onRequestSeries != null)
+		if (onRequestDetailData != null)
 		{
-			onRequestSeries.accept(itemId, priceGraph != null ? priceGraph.getActiveWindow() : TimeWindow.H24);
+			onRequestDetailData.accept(itemId);
 		}
 	}
 
@@ -1779,86 +2204,482 @@ public class ItemTrackerPanel extends PluginPanel
 		detailQtyLabel.setText("Qty: " + abbreviateQty(detailQty));
 		detailQtyLabel.setToolTipText(NUMBER_FORMAT.format(detailQty));
 
-		boolean hasPrices = item.hasPrices();
-		if (hasPrices)
+		final boolean hasPrices = item.hasPrices();
+		final ValueFormat full = ValueFormat.FULL;
+
+		// --- Item Current Values ---
+		icvHigh.setText("High: " + (hasPrices ? formatTotalGp(item.getHighPrice(), full) : "—"));
+		icvLow.setText("Low: " + (hasPrices ? formatTotalGp(item.getLowPrice(), full) : "—"));
+		icvAvg.setText("Average: " + (hasPrices ? formatTotalGp(item.getAvgPrice(), full) : "—"));
+		long vol24 = windowVolume(item, TimeWindow.H24);
+		icvVolume.setText("Volume (24h): " + (vol24 > 0 ? NUMBER_FORMAT.format(vol24) : "—"));
+
+		// --- Collection Current Values ---
+		int colQty = item.getRecordQuantitySum();
+		ccvSection.setVisible(colQty > 0);
+		if (colQty > 0)
 		{
-			installItemValue(detailEaHighLabel, item.getHighPrice(), "High: ", TINT_HIGH);
-			installItemValue(detailEaLowLabel,  item.getLowPrice(),  "Low:  ", TINT_LOW);
-			installItemValue(detailEaAvgLabel,  item.getAvgPrice(),  "Avg:  ", TINT_AVG);
-			installItemValue(detailTotalHighLabel, (long) detailQty * item.getHighPrice(), "High: ", TINT_HIGH);
-			installItemValue(detailTotalLowLabel,  (long) detailQty * item.getLowPrice(),  "Low:  ", TINT_LOW);
-			installItemValue(detailTotalAvgLabel,  (long) detailQty * item.getAvgPrice(),  "Avg:  ", TINT_AVG);
-		}
-		else
-		{
-			clearItemValue(detailEaHighLabel, "High: —");
-			clearItemValue(detailEaLowLabel,  "Low:  —");
-			clearItemValue(detailEaAvgLabel,  "Avg:  —");
-			clearItemValue(detailTotalHighLabel, "High: —");
-			clearItemValue(detailTotalLowLabel,  "Low:  —");
-			clearItemValue(detailTotalAvgLabel,  "Avg:  —");
+			long cHigh = (long) colQty * item.getHighPrice();
+			long cLow = (long) colQty * item.getLowPrice();
+			long cAvg = (long) colQty * item.getAvgPrice();
+			ccvHigh.setText("High: " + (hasPrices ? formatTotalGp(cHigh, full) : "—"));
+			ccvLow.setText("Low: " + (hasPrices ? formatTotalGp(cLow, full) : "—"));
+			ccvAvg.setText("Average: " + (hasPrices ? formatTotalGp(cAvg, full) : "—"));
+			ccvQuantity.setText("Quantity: " + NUMBER_FORMAT.format(colQty));
+			long estProfit = cAvg - item.getCostBasis();
+			String sign = estProfit > 0 ? "+" : "";
+			ccvProfit.setText("Est. Profit: " + (hasPrices ? sign + formatTotalGp(estProfit, full) : "—"));
+			ccvProfit.setForeground(!hasPrices || estProfit == 0 ? ColorScheme.LIGHT_GRAY_COLOR
+					: (estProfit > 0 ? COLOR_HIGH : COLOR_LOW));
 		}
 
+		// --- Price Overview ---
+		for (TimeWindow w : OVERVIEW_WINDOWS)
+		{
+			JLabel[] cells = overviewLabels.get(w);
+			if (cells == null) continue;
+
+			if (w == TimeWindow.LIVE)
+			{
+				// First row shows the latest 5-minute bucket rather than live prices.
+				List<WikiRealtimePriceClient.PricePoint> s5 = item.getSeries5m();
+				WikiRealtimePriceClient.PricePoint last = s5.isEmpty() ? null : s5.get(s5.size() - 1);
+				long high = last == null ? 0 : last.getAvgHighPrice();
+				long low = last == null ? 0 : last.getAvgLowPrice();
+				long avg = last == null ? 0 : overviewMidpoint(last);
+				setPriceCell(cells[0], high, COLOR_HIGH, "High", TINT_HIGH);
+				setPriceCell(cells[1], low, COLOR_LOW, "Low", TINT_LOW);
+				setPriceCell(cells[2], avg, COLOR_AVG, "Avg", TINT_AVG);
+				setOverviewPlaceholder(cells[3]); // Δ% not meaningful for the 5m row
+				if (last == null)
+				{
+					setOverviewPlaceholder(cells[4]);
+				}
+				else
+				{
+					installVolumeValue(cells[4], last.getHighPriceVolume() + last.getLowPriceVolume());
+				}
+				continue;
+			}
+
+			PriceStats s = item.getWindowStats().get(w);
+			setPriceCell(cells[0], s == null ? 0 : s.getHigh(), COLOR_HIGH, "High", TINT_HIGH);
+			setPriceCell(cells[1], s == null ? 0 : s.getLow(), COLOR_LOW, "Low", TINT_LOW);
+			setPriceCell(cells[2], s == null ? 0 : s.getAvg(), COLOR_AVG, "Avg", TINT_AVG);
+			applyDeltaPct(cells[3], item, w);
+
+			// Vol shows the real count, including 0 when nothing traded in the window.
+			if (s == null)
+			{
+				setOverviewPlaceholder(cells[4]);
+			}
+			else
+			{
+				installVolumeValue(cells[4], s.getVolume());
+			}
+		}
+
+		// --- Graphs ---
+		if (priceGraph != null)
+		{
+			priceGraph.setData(item.getSeries5m(), item.getSeries1h(), item.getSeries6h(), item.getSeries24h(), item.getAvgPrice());
+		}
+		if (volumeGraph != null)
+		{
+			volumeGraph.setData(item.getSeries5m(), item.getSeries1h(), item.getSeries6h(), item.getSeries24h(), item.getAvgPrice());
+		}
+
+		// --- Market Info ---
+		miBuyLimit.setText(item.getBuyLimit() > 0 ? NUMBER_FORMAT.format(item.getBuyLimit()) : "N/A");
+		long tax = geTax(item.getAvgPrice());
+		miGeTax.setText(hasPrices ? "~" + formatTotalGp(tax, full) : "—");
+		applyVolatility(item);
+		applyLiquidity(vol24);
+		if (priceRangeBar != null)
+		{
+			long[] range = thirtyDayRange(item);
+			priceRangeBar.setRange(range[0], range[1], item.getAvgPrice());
+			applyRangePosition(range[0], range[1], item.getAvgPrice());
+		}
+
+		// --- Alchemy Info ---
+		long ha = item.getHighAlch();
+		long la = item.getLowAlch();
+		long avg = item.getAvgPrice();
+		haValue.setText(ha > 0 ? formatTotalGp(ha, full) : "—");
+		laValue.setText(la > 0 ? formatTotalGp(la, full) : "—");
+		long haP = ha - avg - natureRunePrice - 5 * fireRunePrice;
+		long laP = la - avg - natureRunePrice - 3 * fireRunePrice;
+		boolean alchKnown = ha > 0 && hasPrices;
+		boolean laKnown = la > 0 && hasPrices;
+		applyProfitLabel(haProfit, haP, alchKnown);
+		applyProfitLabel(laProfit, laP, laKnown);
+		haProfit.setToolTipText(alchKnown ? alchProfitTooltip("High", ha, avg, 5) : null);
+		laProfit.setToolTipText(laKnown ? alchProfitTooltip("Low", la, avg, 3) : null);
+		boolean showAlchProfit = colQty > 0 && alchKnown;
+		alchEstProfitRow.setVisible(showAlchProfit);
+		if (showAlchProfit)
+		{
+			long estProfit = haP * colQty;
+			String sign = estProfit > 0 ? "+" : "";
+			alchEstProfit.setText(sign + formatTotalGp(estProfit, full));
+			alchEstProfit.setForeground(estProfit == 0 ? ColorScheme.LIGHT_GRAY_COLOR
+					: (estProfit > 0 ? COLOR_HIGH : COLOR_LOW));
+			alchEstProfit.setToolTipText("<html>High alch profit (" + signedGp(haP)
+					+ ") × " + NUMBER_FORMAT.format(colQty) + " in collection log"
+					+ "<br>= " + signedGp(estProfit) + "</html>");
+		}
+
+		// --- Collection Log ---
 		acquisitionsModel.setItem(item);
 		applyTableRenderers();
 		acquisitionsTable.revalidate();
 		acquisitionsSection.setVisible(item.getMode() != TrackItemMode.VIEW);
+	}
 
-		for (TimeWindow w : BREAKDOWN_WINDOWS)
+	/**
+	 * Uniform "-" placeholder shared by every empty Price Overview cell. The
+	 * label keeps its existing column colour (green/red/gold for High/Low/Avg,
+	 * grey for Δ%/Vol) so only the dash character is standardised.
+	 */
+	private void setOverviewPlaceholder(JLabel label)
+	{
+		clearItemValue(label, "-");
+	}
+
+	/**
+	 * Sets a High/Low/Avg overview cell: the value in the column colour, or a
+	 * column-coloured "-" placeholder when the value is 0 (no trade of that type).
+	 */
+	private void setPriceCell(JLabel label, long value, Color color, String tooltipLabel, Color tint)
+	{
+		label.setForeground(color);
+		if (value > 0)
 		{
-			JLabel[] cells = breakdownLabels.get(w);
-			if (cells == null) continue;
-			PriceStats s = item.getWindowStats().get(w);
-			if (s == null || (s.getHigh() == 0 && s.getLow() == 0 && s.getAvg() == 0))
+			installItemValue(label, value, "", tooltipLabel, tint);
+		}
+		else
+		{
+			setOverviewPlaceholder(label);
+		}
+	}
+
+	private static long overviewMidpoint(WikiRealtimePriceClient.PricePoint p)
+	{
+		long h = p.getAvgHighPrice();
+		long l = p.getAvgLowPrice();
+		if (h > 0 && l > 0) return (h + l) / 2;
+		return Math.max(h, l);
+	}
+
+	private long windowVolume(TrackedItem item, TimeWindow window)
+	{
+		PriceStats s = item.getWindowStats().get(window);
+		return s == null ? 0 : s.getVolume();
+	}
+
+	private void installVolumeValue(JLabel label, long vol)
+	{
+		String text = formatItemShort(vol);
+		label.setForeground(COLOR_VOLUME);
+		label.setText(text);
+		label.setToolTipText("Volume: " + NUMBER_FORMAT.format(vol));
+		for (MouseListener ml : label.getMouseListeners())
+		{
+			if (ml instanceof HoverTintListener)
 			{
-				clearItemValue(cells[0], "—");
-				clearItemValue(cells[1], "—");
-				clearItemValue(cells[2], "—");
+				label.removeMouseListener(ml);
 			}
-			else
+		}
+		HoverTintListener listener = new HoverTintListener(label, text, TINT_VOLUME);
+		label.addMouseListener(listener);
+		SwingUtilities.invokeLater(listener::applyIfHovered);
+	}
+
+	/**
+	 * Computes the percentage change of the average price over the window's
+	 * timeframe: current average versus the average one full period ago.
+	 */
+	private void applyDeltaPct(JLabel label, TrackedItem item, TimeWindow window)
+	{
+		for (MouseListener ml : label.getMouseListeners())
+		{
+			if (ml instanceof HoverTintListener)
 			{
-				installItemValue(cells[0], s.getHigh(), "", TINT_HIGH);
-				installItemValue(cells[1], s.getLow(),  "", TINT_LOW);
-				installItemValue(cells[2], s.getAvg(),  "", TINT_AVG);
+				label.removeMouseListener(ml);
 			}
+		}
+		label.setToolTipText(null);
+
+		long current = item.getAvgPrice();
+		PriceStats stats = item.getWindowStats().get(window);
+		long baseline = stats == null ? 0 : stats.getAvg();
+		if (current <= 0 || baseline <= 0)
+		{
+			label.setText("-");
+			label.setForeground(COLOR_VOLUME);
+			label.setToolTipText(null);
+			return;
 		}
 
-		if (priceGraph != null)
+		double pct = Math.round(((double) (current - baseline) / baseline) * 1000.0) / 10.0;
+		String pctText;
+		Color color;
+		Color tint;
+		if (pct == 0.0)
 		{
-			priceGraph.setData(item.getDetailSeries(), item.getAvgPrice());
+			pctText = "0%";
+			color = COLOR_VOLUME;
+			tint = TINT_VOLUME;
 		}
-		if (volumeGraph != null)
+		else
 		{
-			volumeGraph.setData(item.getDetailSeries(), item.getAvgPrice());
+			pctText = String.format(Locale.US, "%+.1f%%", pct);
+			color = pct > 0 ? COLOR_HIGH : COLOR_LOW;
+			tint = pct > 0 ? TINT_HIGH : TINT_LOW;
 		}
+
+		label.setText(pctText);
+		label.setForeground(color);
+		label.setToolTipText(pctText + " change compared to " + spelledInterval(window) + " avg.");
+
+		HoverTintListener listener = new HoverTintListener(label, pctText, tint);
+		label.addMouseListener(listener);
+		SwingUtilities.invokeLater(listener::applyIfHovered);
+	}
+
+	private static String spelledInterval(TimeWindow window)
+	{
+		switch (window)
+		{
+			case H1: return "1 hour";
+			case H3: return "3 hour";
+			case H6: return "6 hour";
+			case H12: return "12 hour";
+			case H24: return "24 hour";
+			case WEEK: return "1 week";
+			case MONTH: return "1 month";
+			case MONTH3: return "3 month";
+			case MONTH6: return "6 month";
+			case YEAR: return "1 year";
+			default: return window.toString();
+		}
+	}
+
+	private void applyProfitLabel(JLabel label, long profit, boolean known)
+	{
+		if (!known)
+		{
+			label.setText("—");
+			label.setForeground(Color.WHITE);
+			return;
+		}
+		String sign = profit > 0 ? "+" : "";
+		label.setText(sign + formatTotalGp(profit, ValueFormat.FULL));
+		label.setForeground(profit == 0 ? Color.WHITE : (profit > 0 ? COLOR_HIGH : COLOR_LOW));
+	}
+
+	private static String signedGp(long v)
+	{
+		return (v > 0 ? "+" : "") + NUMBER_FORMAT.format(v) + " gp";
+	}
+
+	/**
+	 * Builds a breakdown tooltip for an alchemy profit:
+	 * alch value − item avg − nature rune − {fireQty} × fire rune.
+	 */
+	private String alchProfitTooltip(String label, long alchValue, long itemAvg, int fireQty)
+	{
+		long natureCost = natureRunePrice;
+		long fireCost = (long) fireQty * fireRunePrice;
+		long profit = alchValue - itemAvg - natureCost - fireCost;
+		return "<html>" + label + " alch profit:<br>"
+				+ NUMBER_FORMAT.format(alchValue) + " (alch value)<br>"
+				+ "− " + NUMBER_FORMAT.format(itemAvg) + " (item avg price)<br>"
+				+ "− " + NUMBER_FORMAT.format(natureRunePrice) + " (nature rune)<br>"
+				+ "− " + fireQty + " × " + NUMBER_FORMAT.format(fireRunePrice) + " (fire rune)<br>"
+				+ "= " + signedGp(profit) + "</html>";
+	}
+
+	private long geTax(long avgPrice)
+	{
+		if (avgPrice < 50)
+		{
+			return 0;
+		}
+		long tax = (long) Math.floor(avgPrice * 0.02);
+		return Math.min(tax, 5_000_000L);
+	}
+
+	private void applyVolatility(TrackedItem item)
+	{
+		List<WikiRealtimePriceClient.PricePoint> series = item.getSeriesFor(TimeWindow.WEEK);
+		long cutoff = System.currentTimeMillis() / 1000L - TimeWindow.WEEK.getDuration().getSeconds();
+		List<Long> samples = new ArrayList<>();
+		for (WikiRealtimePriceClient.PricePoint p : series)
+		{
+			if (p.getTimestamp() < cutoff) continue;
+			if (p.getAvgHighPrice() > 0) samples.add(p.getAvgHighPrice());
+			if (p.getAvgLowPrice() > 0) samples.add(p.getAvgLowPrice());
+		}
+		if (samples.size() < 2)
+		{
+			miVolatility.setText("—");
+			miVolatility.setForeground(Color.WHITE);
+			miVolatility.setToolTipText(null);
+			return;
+		}
+		double mean = 0;
+		for (long v : samples) mean += v;
+		mean /= samples.size();
+		double variance = 0;
+		for (long v : samples) variance += (v - mean) * (v - mean);
+		variance /= samples.size();
+		double pct = mean > 0 ? Math.sqrt(variance) / mean * 100.0 : 0;
+
+		String label;
+		Color color;
+		String tooltip;
+		if (pct < 1.5)
+		{
+			label = "Low"; color = COLOR_HIGH; tooltip = "Stable Price";
+		}
+		else if (pct <= 5.0)
+		{
+			label = "Medium"; color = COLOR_AVG; tooltip = "Occasional/Moderate Price Swings";
+		}
+		else
+		{
+			label = "High"; color = COLOR_LOW; tooltip = "Large/Frequent Price Swings";
+		}
+		miVolatility.setText(label);
+		miVolatility.setForeground(color);
+		miVolatility.setToolTipText(tooltip);
+	}
+
+	private void applyLiquidity(long vol24)
+	{
+		String label;
+		Color color;
+		if (vol24 <= 0)
+		{
+			miLiquidity.setText("—");
+			miLiquidity.setForeground(Color.WHITE);
+			miLiquidity.setToolTipText(null);
+			return;
+		}
+		if (vol24 < 500)
+		{
+			label = "Low"; color = COLOR_LOW;
+		}
+		else if (vol24 <= 5000)
+		{
+			label = "Medium"; color = COLOR_AVG;
+		}
+		else
+		{
+			label = "High"; color = COLOR_HIGH;
+		}
+		miLiquidity.setText(label);
+		miLiquidity.setForeground(color);
+		miLiquidity.setToolTipText("24h volume: " + NUMBER_FORMAT.format(vol24));
+	}
+
+	/**
+	 * Classifies where the current average sits within the 30-day range and
+	 * shows it as High / High Avg / Average / Low Avg / Low.
+	 */
+	private void applyRangePosition(long min, long max, long live)
+	{
+		if (max <= min || live <= 0)
+		{
+			rangePositionLabel.setText("-");
+			rangePositionLabel.setForeground(COLOR_VOLUME);
+			return;
+		}
+		double frac = Math.max(0, Math.min(1, (double) (live - min) / (max - min)));
+		String text;
+		Color color;
+		if (frac >= 0.75)
+		{
+			text = "High";
+			color = COLOR_HIGH;
+		}
+		else if (frac >= 0.60)
+		{
+			text = "High Avg";
+			color = COLOR_AVG;
+		}
+		else if (frac >= 0.40)
+		{
+			text = "Average";
+			color = COLOR_AVG;
+		}
+		else if (frac >= 0.25)
+		{
+			text = "Low Avg";
+			color = COLOR_AVG;
+		}
+		else
+		{
+			text = "Low";
+			color = COLOR_LOW;
+		}
+		rangePositionLabel.setText(text);
+		rangePositionLabel.setForeground(color);
+	}
+
+	private long[] thirtyDayRange(TrackedItem item)
+	{
+		List<WikiRealtimePriceClient.PricePoint> series = item.getSeriesFor(TimeWindow.MONTH);
+		long cutoff = System.currentTimeMillis() / 1000L - TimeWindow.MONTH.getDuration().getSeconds();
+		long min = Long.MAX_VALUE;
+		long max = Long.MIN_VALUE;
+		for (WikiRealtimePriceClient.PricePoint p : series)
+		{
+			if (p.getTimestamp() < cutoff) continue;
+			if (p.getAvgLowPrice() > 0) min = Math.min(min, p.getAvgLowPrice());
+			if (p.getAvgHighPrice() > 0) max = Math.max(max, p.getAvgHighPrice());
+		}
+		if (min == Long.MAX_VALUE || max == Long.MIN_VALUE)
+		{
+			return new long[]{0, 0};
+		}
+		return new long[]{min, max};
 	}
 
 	private void applyTableRenderers()
 	{
-		DefaultTableCellRenderer centerAlign = new DefaultTableCellRenderer();
-		centerAlign.setHorizontalAlignment(SwingConstants.CENTER);
 		JTextField centerEditorField = new JTextField();
 		centerEditorField.setHorizontalAlignment(SwingConstants.CENTER);
 		DefaultCellEditor centerEditor = new DefaultCellEditor(centerEditorField);
 		int cols = acquisitionsTable.getColumnCount();
 		for (int i = 0; i < cols; i++)
 		{
-			if (i == 3)
+			acquisitionsTable.getColumnModel().getColumn(i).setCellRenderer(new AcqCellRenderer(i == 3));
+			if (i != 3)
 			{
-				acquisitionsTable.getColumnModel().getColumn(i).setCellRenderer(new ProfitCellRenderer());
-			}
-			else
-			{
-				acquisitionsTable.getColumnModel().getColumn(i).setCellRenderer(centerAlign);
 				acquisitionsTable.getColumnModel().getColumn(i).setCellEditor(centerEditor);
 			}
 		}
 	}
 
+	private static String acqTooltipLabel(int col)
+	{
+		switch (col)
+		{
+			case 0: return "Quantity";
+			case 1: return "Bought At";
+			case 2: return "Sold At";
+			case 3: return "Profit";
+			default: return "";
+		}
+	}
+
 	private class AcquisitionsTableModel extends AbstractTableModel
 	{
-		private final String[] COLS_FULL = {"Qty", "Bought at", "Sold at", "Profit"};
-		private final String[] COLS_NO_PROFIT = {"Qty", "Bought at", "Sold at"};
+		private final String[] COLS_FULL = {"Qty", "Bought", "Sold", "Profit"};
+		private final String[] COLS_NO_PROFIT = {"Qty", "Bought", "Sold"};
 		private TrackedItem item;
 
 		void setItem(TrackedItem item)
@@ -1943,10 +2764,18 @@ public class ItemTrackerPanel extends PluginPanel
 		}
 	}
 
-	private class ProfitCellRenderer extends DefaultTableCellRenderer
+	/**
+	 * Renders collection-log numbers: full format at ≤4 digits, short format
+	 * when they would overflow. Short-form cells highlight (column-tinted) and
+	 * carry a full-value tooltip on hover, mirroring the rest of the plugin.
+	 */
+	private class AcqCellRenderer extends DefaultTableCellRenderer
 	{
-		ProfitCellRenderer()
+		private final boolean profit;
+
+		AcqCellRenderer(boolean profit)
 		{
+			this.profit = profit;
 			setHorizontalAlignment(SwingConstants.CENTER);
 		}
 
@@ -1954,19 +2783,162 @@ public class ItemTrackerPanel extends PluginPanel
 		public Component getTableCellRendererComponent(JTable table, Object value,
 				boolean isSelected, boolean hasFocus, int row, int column)
 		{
-			Component c = super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column);
-			if (value instanceof Number)
+			super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column);
+			if (!(value instanceof Number))
 			{
-				long v = ((Number) value).longValue();
-				c.setForeground(v > 0 ? COLOR_HIGH : v < 0 ? COLOR_LOW : Color.WHITE);
-				String sign = v > 0 ? "+" : "";
-				setText(sign + NUMBER_FORMAT.format(v));
+				setText(value == null ? "" : value.toString());
+				if (!isSelected)
+				{
+					setBackground(table.getBackground());
+					setForeground(Color.WHITE);
+				}
+				return this;
+			}
+
+			long v = ((Number) value).longValue();
+			// Profit overflows sooner (it carries a sign), so it goes short at 4+ digits
+			// and is capped to 3 significant figures (e.g. 234K / 23.4K, never 234.5K).
+			boolean shortForm = Math.abs(v) >= (profit ? 1000 : 10000);
+			String text = shortForm
+					? (profit ? formatShort3Sig(v) : formatItemShort(v))
+					: NUMBER_FORMAT.format(v);
+			if (profit && v > 0)
+			{
+				text = "+" + text;
+			}
+			setText(text);
+
+			Color fg = profit ? (v > 0 ? COLOR_HIGH : v < 0 ? COLOR_LOW : Color.WHITE) : Color.WHITE;
+			setForeground(isSelected ? table.getSelectionForeground() : fg);
+
+			boolean hovered = shortForm && row == acqHoverRow && column == acqHoverCol;
+			if (isSelected)
+			{
+				setBackground(table.getSelectionBackground());
+			}
+			else if (hovered)
+			{
+				setForeground(fg);
+				setBackground(profit ? (v >= 0 ? TINT_HIGH : TINT_LOW) : TINT_VOLUME);
 			}
 			else
 			{
-				c.setForeground(Color.WHITE);
+				setBackground(table.getBackground());
 			}
-			return c;
+			return this;
+		}
+	}
+
+	/**
+	 * 30-day price range gradient (red → gold → green) with an inverted
+	 * triangle marking where the live price sits within the range. The
+	 * triangle is tinted to match the gradient colour beneath it.
+	 */
+	private static final class PriceRangeBar extends JPanel
+	{
+		private static final Color RANGE_RED = new Color(220, 100, 100);
+		private static final Color RANGE_GOLD = new Color(255, 200, 0);
+		private static final Color RANGE_GREEN = new Color(100, 220, 100);
+		private static final int TRIANGLE_H = 9;
+		private static final int BAR_H = 5;
+		private static final int BAR_ARC = 3; // 1.5px corner radius
+
+		private long min;
+		private long max;
+		private long live;
+
+		PriceRangeBar()
+		{
+			setBackground(ColorScheme.DARKER_GRAY_COLOR);
+			setPreferredSize(new Dimension(220, TRIANGLE_H + 2 + BAR_H + 16));
+			setAlignmentX(Component.LEFT_ALIGNMENT);
+		}
+
+		@Override
+		public Dimension getMaximumSize()
+		{
+			return new Dimension(Integer.MAX_VALUE, getPreferredSize().height);
+		}
+
+		void setRange(long min, long max, long live)
+		{
+			this.min = min;
+			this.max = max;
+			this.live = live;
+			repaint();
+		}
+
+		private static Color lerp(Color a, Color b, double t)
+		{
+			return new Color(
+					(int) Math.round(a.getRed() + (b.getRed() - a.getRed()) * t),
+					(int) Math.round(a.getGreen() + (b.getGreen() - a.getGreen()) * t),
+					(int) Math.round(a.getBlue() + (b.getBlue() - a.getBlue()) * t));
+		}
+
+		private static Color colorAt(double f)
+		{
+			f = Math.max(0, Math.min(1, f));
+			if (f < 0.5)
+			{
+				return lerp(RANGE_RED, RANGE_GOLD, f / 0.5);
+			}
+			return lerp(RANGE_GOLD, RANGE_GREEN, (f - 0.5) / 0.5);
+		}
+
+		@Override
+		protected void paintComponent(Graphics g)
+		{
+			super.paintComponent(g);
+			Graphics2D g2 = (Graphics2D) g.create();
+			try
+			{
+				g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+				g2.setFont(FontManager.getRunescapeSmallFont());
+				FontMetrics fm = g2.getFontMetrics();
+				int w = getWidth();
+				int barW = Math.max(1, w);
+				int barY = TRIANGLE_H + 2;
+
+				boolean hasData = max > min;
+				if (!hasData)
+				{
+					g2.setColor(new Color(80, 80, 80));
+					g2.fillRoundRect(0, barY, barW, BAR_H, BAR_ARC, BAR_ARC);
+					g2.setColor(Color.GRAY);
+					String msg = "No data";
+					g2.drawString(msg, (barW - fm.stringWidth(msg)) / 2, barY + BAR_H + fm.getAscent() + 2);
+					return;
+				}
+
+				// Draw the gradient clipped to a rounded rectangle for soft corners.
+				Shape oldClip = g2.getClip();
+				g2.setClip(new java.awt.geom.RoundRectangle2D.Double(0, barY, barW, BAR_H, BAR_ARC, BAR_ARC));
+				for (int x = 0; x < barW; x++)
+				{
+					g2.setColor(colorAt((double) x / Math.max(1, barW - 1)));
+					g2.drawLine(x, barY, x, barY + BAR_H);
+				}
+				g2.setClip(oldClip);
+
+				double frac = Math.max(0, Math.min(1, (double) (live - min) / (max - min)));
+				int tx = (int) Math.round(frac * (barW - 1));
+				g2.setColor(colorAt(frac));
+				int[] xs = {tx - 5, tx + 5, tx};
+				int[] ys = {0, 0, TRIANGLE_H};
+				g2.fillPolygon(xs, ys, 3);
+
+				int labelY = barY + BAR_H + fm.getAscent() + 2;
+				g2.setColor(RANGE_RED);
+				g2.drawString(NUMBER_FORMAT.format(min), 0, labelY);
+				g2.setColor(RANGE_GREEN);
+				String maxS = NUMBER_FORMAT.format(max);
+				g2.drawString(maxS, barW - fm.stringWidth(maxS), labelY);
+			}
+			finally
+			{
+				g2.dispose();
+			}
 		}
 	}
 }
