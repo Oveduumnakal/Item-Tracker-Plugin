@@ -563,7 +563,7 @@ public class ItemTrackerPlugin extends Plugin
 				{
 					if (item.getQuantity() > 0 && item.getAcquisitions().isEmpty())
 					{
-						addOpenAcquisition(item, item.getQuantity(), prices.avg());
+						addOpenAcquisition(item, item.getQuantity(), autoAddPrice(item));
 					}
 					item.setCostBasisInitialized(true);
 					persistTrackedItems();
@@ -611,6 +611,20 @@ public class ItemTrackerPlugin extends Plugin
 			return;
 		}
 
+		if (SECTION_SLOT_KEYS.contains(event.getKey()))
+		{
+			boolean swapped = swapConflictingSection(event);
+			refreshPanel();
+			if (swapped)
+			{
+				// The swap writes the conflicting section's new slot to config, but the
+				// open settings panel doesn't observe config changes, so the swapped
+				// dropdown would keep showing its old value. Force the panel to rebuild.
+				rebuildOpenConfigPanel();
+			}
+			return;
+		}
+
 		switch (event.getKey())
 		{
 			case ItemTrackerConfig.KEY_TRACKED_ITEMS:
@@ -626,6 +640,111 @@ public class ItemTrackerPlugin extends Plugin
 			default:
 				refreshPanel();
 		}
+	}
+
+	/** Config keys of the eight "Show {Section}" detail-view ordering dropdowns. */
+	private static final java.util.Set<String> SECTION_SLOT_KEYS = java.util.Set.of(
+			ItemTrackerConfig.KEY_SHOW_ITEM_VALUES,
+			ItemTrackerConfig.KEY_SHOW_COLLECTION_VALUES,
+			ItemTrackerConfig.KEY_SHOW_MARKET_INFO,
+			ItemTrackerConfig.KEY_SHOW_PRICE_OVERVIEW,
+			ItemTrackerConfig.KEY_SHOW_PRICE_GRAPH,
+			ItemTrackerConfig.KEY_SHOW_VOLUME_GRAPH,
+			ItemTrackerConfig.KEY_SHOW_ALCH_INFO,
+			ItemTrackerConfig.KEY_SHOW_ITEM_LOG);
+
+	/**
+	 * Enforces the "each slot used once" rule: when a section is moved to a slot
+	 * already held by another section, the other section takes the moved
+	 * section's previous slot. NONE is exempt (any number may be hidden). The
+	 * resulting state has no duplicate, so the re-entrant ConfigChanged from the
+	 * swap finds nothing further to swap.
+	 *
+	 * @return true if a conflicting section was moved.
+	 */
+	private boolean swapConflictingSection(ConfigChanged event)
+	{
+		SectionSlot newSlot;
+		SectionSlot oldSlot;
+		try
+		{
+			newSlot = SectionSlot.valueOf(event.getNewValue());
+			oldSlot = SectionSlot.valueOf(event.getOldValue());
+		}
+		catch (IllegalArgumentException | NullPointerException e)
+		{
+			return false;
+		}
+
+		if (newSlot == SectionSlot.NONE || newSlot == oldSlot)
+		{
+			return false;
+		}
+
+		for (String key : SECTION_SLOT_KEYS)
+		{
+			if (key.equals(event.getKey()))
+			{
+				continue;
+			}
+			SectionSlot other = configManager.getConfiguration(
+					ItemTrackerConfig.GROUP, key, SectionSlot.class);
+			if (other == newSlot)
+			{
+				configManager.setConfiguration(ItemTrackerConfig.GROUP, key, oldSlot);
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Forces the currently open RuneLite settings panel to rebuild so a slot
+	 * swapped onto another section is reflected in its dropdown. RuneLite's
+	 * ConfigPanel doesn't observe config changes, and exposes no public refresh,
+	 * so we locate it in the Swing tree and invoke its private rebuild(). Failure
+	 * is non-fatal: the config value is already correct, only the display lags.
+	 */
+	private void rebuildOpenConfigPanel()
+	{
+		SwingUtilities.invokeLater(() ->
+		{
+			try
+			{
+				Class<?> configPanelClass = Class.forName("net.runelite.client.plugins.config.ConfigPanel");
+				java.lang.reflect.Method rebuild = configPanelClass.getDeclaredMethod("rebuild");
+				rebuild.setAccessible(true);
+				for (java.awt.Window window : java.awt.Window.getWindows())
+				{
+					for (java.awt.Component panel : findComponents(window, configPanelClass))
+					{
+						rebuild.invoke(panel);
+					}
+				}
+			}
+			catch (ReflectiveOperationException e)
+			{
+				log.debug("Unable to refresh config panel after section swap", e);
+			}
+		});
+	}
+
+	/** Recursively collects components of the given type under {@code root}. */
+	private static List<java.awt.Component> findComponents(java.awt.Component root, Class<?> type)
+	{
+		List<java.awt.Component> found = new ArrayList<>();
+		if (type.isInstance(root))
+		{
+			found.add(root);
+		}
+		if (root instanceof java.awt.Container)
+		{
+			for (java.awt.Component child : ((java.awt.Container) root).getComponents())
+			{
+				found.addAll(findComponents(child, type));
+			}
+		}
+		return found;
 	}
 
 	@Subscribe
@@ -743,7 +862,7 @@ public class ItemTrackerPlugin extends Plugin
 
 		containerCounts.put(containerId, newCounts);
 
-		if (firstSync && containerId == InventoryID.BANK && config.autoUpdateQuantity())
+		if (firstSync && containerId == InventoryID.BANK && config.autoAddItems() != AutoAddMode.OFF)
 		{
 			reconcileAllQuantities();
 		}
@@ -870,6 +989,28 @@ public class ItemTrackerPlugin extends Plugin
 		}
 	}
 
+	/**
+	 * "Bought at" price recorded for an auto-added acquisition, per the Auto Add
+	 * Items mode. OFF falls back to the average price so the cost-basis seeding
+	 * (which is not gated by the mode) keeps its historical behavior.
+	 */
+	private long autoAddPrice(TrackedItem tracked)
+	{
+		switch (config.autoAddItems())
+		{
+			case HIGH:
+				return tracked.getHighPrice();
+			case LOW:
+				return tracked.getLowPrice();
+			case ZERO:
+				return 0;
+			case AVG:
+			case OFF:
+			default:
+				return tracked.getAvgPrice();
+		}
+	}
+
 	private void addOpenAcquisition(TrackedItem tracked, int qty, long boughtAt)
 	{
 		if (qty <= 0)
@@ -986,7 +1127,7 @@ public class ItemTrackerPlugin extends Plugin
 		}
 		Map<Integer, Integer> deltas = new HashMap<>(pendingItemDeltas);
 		pendingItemDeltas.clear();
-		if (!config.autoUpdateQuantity() || trackedItems.isEmpty())
+		if (config.autoAddItems() == AutoAddMode.OFF || trackedItems.isEmpty())
 		{
 			return;
 		}
@@ -1004,7 +1145,7 @@ public class ItemTrackerPlugin extends Plugin
 			}
 			if (delta > 0)
 			{
-				addOpenAcquisition(tracked, delta, tracked.getAvgPrice());
+				addOpenAcquisition(tracked, delta, autoAddPrice(tracked));
 			}
 			else
 			{
@@ -1062,7 +1203,7 @@ public class ItemTrackerPlugin extends Plugin
 			int logDelta = total - tracked.getRecordQuantitySum();
 			if (logDelta > 0)
 			{
-				addOpenAcquisition(tracked, logDelta, tracked.getAvgPrice());
+				addOpenAcquisition(tracked, logDelta, autoAddPrice(tracked));
 				changed = true;
 			}
 			else if (logDelta < 0)

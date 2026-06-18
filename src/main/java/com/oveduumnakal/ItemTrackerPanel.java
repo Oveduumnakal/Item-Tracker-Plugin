@@ -57,11 +57,13 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
@@ -143,6 +145,19 @@ public class ItemTrackerPanel extends PluginPanel
 	private JPanel overviewGrid;
 	private PriceGraphPanel priceGraph;
 	private PriceGraphPanel volumeGraph;
+
+	// Detail-view section wrappers, host, and applied-layout/row caches.
+	private JPanel topStack;
+	private JPanel detailSectionsHost;
+	private JPanel itemValuesSection;
+	private JPanel marketInfoSection;
+	private JPanel priceOverviewSection;
+	private JPanel priceGraphSection;
+	private JPanel volumeGraphSection;
+	private JPanel alchInfoSection;
+	private String appliedSectionLayout;
+	private Set<TimeWindow> appliedOverviewRows;
+
 	private final Map<TimeWindow, JLabel[]> overviewLabels = new EnumMap<>(TimeWindow.class);
 	private final List<JLabel> overviewWindowLabels = new ArrayList<>();
 	private static final TimeWindow[] OVERVIEW_WINDOWS = {
@@ -1469,43 +1484,39 @@ public class ItemTrackerPanel extends PluginPanel
 		titleRow.add(detailIconLabel, BorderLayout.WEST);
 		titleRow.add(titleTextStack, BorderLayout.CENTER);
 
-		JPanel topStack = new JPanel();
+		topStack = new JPanel();
 		topStack.setLayout(new BoxLayout(topStack, BoxLayout.Y_AXIS));
 		topStack.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		topStack.add(headerRow);
 		topStack.add(titleRow);
 
-		topStack.add(buildDetailSectionTitle("Item Current Values", true));
-		topStack.add(buildCurrentValuesBlock(icvHigh, icvLow, icvAvg, icvVolume, null));
+		// Each detail section is its own self-contained wrapper so the layout can
+		// reorder or hide them per config. detailSectionsHost holds them in order.
+		detailSectionsHost = new JPanel();
+		detailSectionsHost.setLayout(new BoxLayout(detailSectionsHost, BoxLayout.Y_AXIS));
+		detailSectionsHost.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		detailSectionsHost.setAlignmentX(Component.LEFT_ALIGNMENT);
+		topStack.add(detailSectionsHost);
 
-		ccvSection = new JPanel();
-		ccvSection.setLayout(new BoxLayout(ccvSection, BoxLayout.Y_AXIS));
-		ccvSection.setBackground(ColorScheme.DARK_GRAY_COLOR);
-		ccvSection.setAlignmentX(Component.LEFT_ALIGNMENT);
-		ccvSection.add(buildDetailSectionTitle("Collection Current Values", true));
-		ccvSection.add(buildCurrentValuesBlock(ccvHigh, ccvLow, ccvAvg, ccvQuantity, ccvProfit));
-		topStack.add(ccvSection);
+		itemValuesSection = buildDetailSection("Item Current Values",
+				buildCurrentValuesBlock(icvHigh, icvLow, icvAvg, icvVolume, null));
 
-		topStack.add(buildDetailSectionTitle("Price Overview", true));
-		topStack.add(buildOverviewGrid());
+		ccvSection = buildDetailSection("Collection Current Values",
+				buildCurrentValuesBlock(ccvHigh, ccvLow, ccvAvg, ccvQuantity, ccvProfit));
 
-		topStack.add(buildDetailSectionTitle("Price Graph", true));
+		priceOverviewSection = buildDetailSection("Price Overview", buildOverviewGrid());
+
 		priceGraph = new PriceGraphPanel(PriceGraphPanel.Mode.PRICE);
 		priceGraph.setAlignmentX(Component.LEFT_ALIGNMENT);
-		topStack.add(priceGraph);
+		priceGraphSection = buildDetailSection("Price Graph", priceGraph, Box.createVerticalStrut(4));
 
-		topStack.add(Box.createVerticalStrut(4));
-
-		topStack.add(buildDetailSectionTitle("Volume Graph", true));
 		volumeGraph = new PriceGraphPanel(PriceGraphPanel.Mode.VOLUME);
 		volumeGraph.setAlignmentX(Component.LEFT_ALIGNMENT);
-		topStack.add(volumeGraph);
+		volumeGraphSection = buildDetailSection("Volume Graph", volumeGraph);
 
-		topStack.add(buildDetailSectionTitle("Market Info", true));
-		topStack.add(buildMarketInfoBlock());
+		marketInfoSection = buildDetailSection("Market Info", buildMarketInfoBlock());
 
-		topStack.add(buildDetailSectionTitle("Alchemy Info", true));
-		topStack.add(buildAlchBlock());
+		alchInfoSection = buildDetailSection("Alchemy Info", buildAlchBlock());
 
 		detailCard.add(topStack, BorderLayout.NORTH);
 
@@ -1776,7 +1787,104 @@ public class ItemTrackerPanel extends PluginPanel
 		acquisitionsSection.add(tableScroll, BorderLayout.CENTER);
 		acquisitionsSection.add(tableButtons, BorderLayout.SOUTH);
 
-		topStack.add(acquisitionsSection);
+		// Populate the overview rows and order/visibility from config now that
+		// every section wrapper exists.
+		rebuildOverviewGrid();
+		applyDetailSectionLayout();
+	}
+
+	/**
+	 * Wraps a detail-view section title and its content in a self-contained,
+	 * vertically stacked panel so {@link #applyDetailSectionLayout()} can reorder
+	 * or hide it as a unit (title divider included).
+	 */
+	private JPanel buildDetailSection(String title, Component... contents)
+	{
+		JPanel wrapper = new JPanel();
+		wrapper.setLayout(new BoxLayout(wrapper, BoxLayout.Y_AXIS));
+		wrapper.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		wrapper.setAlignmentX(Component.LEFT_ALIGNMENT);
+		wrapper.add(buildDetailSectionTitle(title, true));
+		for (Component c : contents)
+		{
+			wrapper.add(c);
+		}
+		return wrapper;
+	}
+
+	/**
+	 * Re-adds the detail sections to the host in the order configured by the
+	 * "Show {Section}" dropdowns, skipping any set to None. Cheap to call on every
+	 * refresh: a signature check skips the rebuild when nothing changed.
+	 */
+	private void applyDetailSectionLayout()
+	{
+		if (detailSectionsHost == null)
+		{
+			return;
+		}
+
+		JPanel[] sections = {
+				itemValuesSection, ccvSection, marketInfoSection, priceOverviewSection,
+				priceGraphSection, volumeGraphSection, alchInfoSection, acquisitionsSection
+		};
+		SectionSlot[] slots = {
+				config.showItemValues(), config.showCollectionValues(), config.showMarketInfo(),
+				config.showPriceOverview(), config.showPriceGraph(), config.showVolumeGraph(),
+				config.showAlchInfo(), config.showItemLog()
+		};
+
+		StringBuilder sig = new StringBuilder();
+		for (SectionSlot slot : slots)
+		{
+			sig.append(slot.ordinal()).append(',');
+		}
+		String signature = sig.toString();
+		if (signature.equals(appliedSectionLayout))
+		{
+			return;
+		}
+		appliedSectionLayout = signature;
+
+		List<Integer> order = new ArrayList<>();
+		for (int i = 0; i < sections.length; i++)
+		{
+			if (!slots[i].isNone())
+			{
+				order.add(i);
+			}
+		}
+		order.sort(Comparator.comparingInt(i -> slots[i].ordinal()));
+
+		detailSectionsHost.removeAll();
+		for (int i : order)
+		{
+			sections[i].setVisible(true);
+			detailSectionsHost.add(sections[i]);
+		}
+		detailSectionsHost.revalidate();
+		detailSectionsHost.repaint();
+	}
+
+	/**
+	 * Rebuilds the Price Overview grid to contain only the rows selected in
+	 * config. Skipped when the selection is unchanged. The populate pass keys off
+	 * {@link #overviewLabels}, so omitted rows are simply never filled.
+	 */
+	private void rebuildOverviewGrid()
+	{
+		if (overviewGrid == null)
+		{
+			return;
+		}
+
+		Set<TimeWindow> desired = config.priceOverviewRows().getWindows();
+		if (desired.equals(appliedOverviewRows))
+		{
+			return;
+		}
+		appliedOverviewRows = desired;
+		populateOverviewGrid(desired);
 	}
 
 	public int getDetailItemId()
@@ -1919,6 +2027,18 @@ public class ItemTrackerPanel extends PluginPanel
 		overviewGrid.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 		overviewGrid.setBorder(new EmptyBorder(6, 3, 2, 3));
 		overviewGrid.setAlignmentX(Component.LEFT_ALIGNMENT);
+		return overviewGrid;
+	}
+
+	/**
+	 * (Re)builds the Price Overview grid contents, including only the time-window
+	 * rows in {@code rows}. The header row is always present.
+	 */
+	private void populateOverviewGrid(Set<TimeWindow> rows)
+	{
+		overviewGrid.removeAll();
+		overviewLabels.clear();
+		overviewWindowLabels.clear();
 
 		GridBagConstraints c = new GridBagConstraints();
 		c.insets = new Insets(2, 1, 2, 1);
@@ -1959,6 +2079,10 @@ public class ItemTrackerPanel extends PluginPanel
 		Color[] cellColors = {COLOR_HIGH, COLOR_LOW, COLOR_AVG, COLOR_VOLUME, COLOR_VOLUME};
 		for (TimeWindow w : OVERVIEW_WINDOWS)
 		{
+			if (!rows.contains(w))
+			{
+				continue;
+			}
 			JLabel windowLbl = new JLabel(w == TimeWindow.LIVE ? "5m" : w.toString(), SwingConstants.RIGHT);
 			windowLbl.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 			windowLbl.setFont(FontManager.getRunescapeSmallFont());
@@ -1985,7 +2109,8 @@ public class ItemTrackerPanel extends PluginPanel
 			overviewLabels.put(w, cells);
 			y++;
 		}
-		return overviewGrid;
+		overviewGrid.revalidate();
+		overviewGrid.repaint();
 	}
 
 	private JPanel buildMarketInfoBlock()
@@ -2196,6 +2321,11 @@ public class ItemTrackerPanel extends PluginPanel
 
 	private void populateDetail(TrackedItem item)
 	{
+		// Apply any config-driven changes to row selection and section order/visibility
+		// before filling in values (both are no-ops when nothing changed).
+		rebuildOverviewGrid();
+		applyDetailSectionLayout();
+
 		AsyncBufferedImage icon = itemManager.getImage(item.getItemId());
 		icon.addTo(detailIconLabel);
 		detailNameLabel.setText(item.getName());

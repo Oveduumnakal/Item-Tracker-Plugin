@@ -54,9 +54,20 @@ public interface ItemTrackerConfig extends Config
 	String KEY_ROW_2_DATA = "row2Data";
 	String KEY_ROW_3_DATA = "row3Data";
 	String KEY_SHOW_ITEM_PROFIT_ROW = "showItemProfitRow";
-	String KEY_AUTO_UPDATE_QUANTITY = "autoUpdateQuantity";
 
-	// Section 3: GE Estimates Display
+	// Section 3: Detailed View
+	String KEY_SHOW_ITEM_VALUES = "showItemValues";
+	String KEY_SHOW_COLLECTION_VALUES = "showCollectionValues";
+	String KEY_SHOW_MARKET_INFO = "showMarketInfo";
+	String KEY_SHOW_PRICE_OVERVIEW = "showPriceOverview";
+	String KEY_SHOW_PRICE_GRAPH = "showPriceGraph";
+	String KEY_SHOW_VOLUME_GRAPH = "showVolumeGraph";
+	String KEY_SHOW_ALCH_INFO = "showAlchInfo";
+	String KEY_SHOW_ITEM_LOG = "showItemLog";
+	String KEY_PRICE_OVERVIEW_ROWS = "priceOverviewPreset";
+	String KEY_AUTO_ADD_ITEMS = "autoAddItems";
+
+	// Section 4: GE Estimates Display
 	String KEY_SHOW_GE_ESTIMATES = "showGeEstimates";
 	String KEY_GE_ESTIMATES_POSITION = "geEstimatesPosition";
 	String KEY_GE_ESTIMATES_FORMAT = "geEstimatesFormat";
@@ -65,7 +76,7 @@ public interface ItemTrackerConfig extends Config
 	String KEY_SHOW_EST_AVG = "showEstAvg";
 	String KEY_SHOW_EST_PROFIT = "showEstProfit";
 
-	// Section 4: Tracking
+	// Section 5: Tracking
 	String KEY_ADD_CONTEXT_MENU_OPTION = "addContextMenuOption";
 	String KEY_TRACK_ITEM_COLOR = "trackItemColor";
 	String KEY_STOP_TRACKING_COLOR = "stopTrackingColor";
@@ -73,7 +84,7 @@ public interface ItemTrackerConfig extends Config
 	String KEY_HIGHLIGHT_COLOR = "highlightColor";
 	String KEY_GLOW_EFFECT = "glowEffect";
 
-	// Section 5: Notifications
+	// Section 6: Notifications
 	String KEY_NOTIFY_ON_VALUE_THRESHOLD = "notifyOnValueThreshold";
 	String KEY_VALUE_THRESHOLD = "valueThreshold";
 
@@ -106,9 +117,16 @@ public interface ItemTrackerConfig extends Config
 	String trackingSection = "tracking";
 
 	@ConfigSection(
+			name = "Detailed View",
+			description = "Order, visibility, and contents of the item detail view sections",
+			position = 4
+	)
+	String detailViewSection = "detailView";
+
+	@ConfigSection(
 			name = "Notifications",
 			description = "Value threshold notification settings",
-			position = 4
+			position = 5
 	)
 	String notificationsSection = "notifications";
 
@@ -249,19 +267,131 @@ public interface ItemTrackerConfig extends Config
 		return true;
 	}
 
+	// ---- Section 3: Detailed View ----
+
 	@ConfigItem(
-			keyName = KEY_AUTO_UPDATE_QUANTITY,
-			name = "Auto-Update Quantity",
-			description = "Automatically update tracked-item quantities from inventory/bank changes. When off, manual edits still work.",
-			section = trackedItemSection,
-			position = 9
+			keyName = KEY_SHOW_ITEM_VALUES,
+			name = "Show Item Values",
+			description = "Position of the Item Current Values section, or None to hide it",
+			section = detailViewSection,
+			position = 0
 	)
-	default boolean autoUpdateQuantity()
+	default SectionSlot showItemValues()
 	{
-		return true;
+		return SectionSlot.FIRST;
 	}
 
-	// ---- Section 3: GE Estimates Display ----
+	@ConfigItem(
+			keyName = KEY_SHOW_COLLECTION_VALUES,
+			name = "Show Collection Values",
+			description = "Position of the Collection Current Values section, or None to hide it",
+			section = detailViewSection,
+			position = 1
+	)
+	default SectionSlot showCollectionValues()
+	{
+		return SectionSlot.SECOND;
+	}
+
+	@ConfigItem(
+			keyName = KEY_SHOW_MARKET_INFO,
+			name = "Show Market Info",
+			description = "Position of the Market Info section, or None to hide it",
+			section = detailViewSection,
+			position = 2
+	)
+	default SectionSlot showMarketInfo()
+	{
+		return SectionSlot.THIRD;
+	}
+
+	@ConfigItem(
+			keyName = KEY_SHOW_PRICE_OVERVIEW,
+			name = "Show Price Overview",
+			description = "Position of the Price Overview section, or None to hide it",
+			section = detailViewSection,
+			position = 3
+	)
+	default SectionSlot showPriceOverview()
+	{
+		return SectionSlot.FOURTH;
+	}
+
+	@ConfigItem(
+			keyName = KEY_SHOW_PRICE_GRAPH,
+			name = "Show Price Graph",
+			description = "Position of the Price Graph section, or None to hide it",
+			section = detailViewSection,
+			position = 4
+	)
+	default SectionSlot showPriceGraph()
+	{
+		return SectionSlot.FIFTH;
+	}
+
+	@ConfigItem(
+			keyName = KEY_SHOW_VOLUME_GRAPH,
+			name = "Show Volume Graph",
+			description = "Position of the Volume Graph section, or None to hide it",
+			section = detailViewSection,
+			position = 5
+	)
+	default SectionSlot showVolumeGraph()
+	{
+		return SectionSlot.SIXTH;
+	}
+
+	@ConfigItem(
+			keyName = KEY_SHOW_ALCH_INFO,
+			name = "Show Alch Info",
+			description = "Position of the Alchemy Info section, or None to hide it",
+			section = detailViewSection,
+			position = 6
+	)
+	default SectionSlot showAlchInfo()
+	{
+		return SectionSlot.SEVENTH;
+	}
+
+	@ConfigItem(
+			keyName = KEY_SHOW_ITEM_LOG,
+			name = "Show Item Log",
+			description = "Position of the Item Collection Log section, or None to hide it",
+			section = detailViewSection,
+			position = 7
+	)
+	default SectionSlot showItemLog()
+	{
+		return SectionSlot.EIGHTH;
+	}
+
+	@ConfigItem(
+			keyName = KEY_PRICE_OVERVIEW_ROWS,
+			name = "Price Overview Rows",
+			description = "How many time-window rows the Price Overview shows. "
+					+ "Recent: 5m, 1h, 12h, 24hr. Standard: 5m, 1h, 24hr, 1wk, 1mo. Detailed: all windows.",
+			section = detailViewSection,
+			position = 8
+	)
+	default OverviewPreset priceOverviewRows()
+	{
+		return OverviewPreset.DETAILED;
+	}
+
+	@ConfigItem(
+			keyName = KEY_AUTO_ADD_ITEMS,
+			name = "Auto Add Items",
+			description = "Automatically add collection-log entries from inventory/bank changes, and the price they buy in at. "
+					+ "High/Low/Avg use the latest matching price, Zero buys in at 0, Off disables auto-adds (manual edits still work).",
+			section = detailViewSection,
+			position = 9
+	)
+	default AutoAddMode autoAddItems()
+	{
+		return AutoAddMode.AVG;
+	}
+
+	// ---- Section 4: GE Estimates Display ----
 
 	@ConfigItem(
 			keyName = KEY_SHOW_GE_ESTIMATES,
@@ -347,7 +477,7 @@ public interface ItemTrackerConfig extends Config
 		return true;
 	}
 
-	// ---- Section 4: Tracking ----
+	// ---- Section 5: Tracking ----
 
 	@ConfigItem(
 			keyName = KEY_ADD_CONTEXT_MENU_OPTION,
@@ -421,7 +551,7 @@ public interface ItemTrackerConfig extends Config
 		return GlowSpeed.MEDIUM;
 	}
 
-	// ---- Section 5: Notifications ----
+	// ---- Section 6: Notifications ----
 
 	@ConfigItem(
 			keyName = KEY_NOTIFY_ON_VALUE_THRESHOLD,
