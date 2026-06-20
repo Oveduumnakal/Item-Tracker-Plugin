@@ -35,6 +35,9 @@ public class TrackedItem
 
 	private boolean costBasisInitialized;
 	private List<AcquisitionRecord> acquisitions = new ArrayList<>();
+	private List<NotificationRule> notifications = new ArrayList<>();
+	/** True once the notifications table has been seeded with its default rows. */
+	private boolean notificationsInitialized;
 
 	private TrackItemMode mode = TrackItemMode.TRACK;
 	private Map<TimeWindow, PriceStats> windowStats = new EnumMap<>(TimeWindow.class);
@@ -148,5 +151,23 @@ public class TrackedItem
 	public long getProfit()
 	{
 		return getRealizedProfit() + getUnrealizedProfit();
+	}
+
+	/**
+	 * Profit valuing open positions at {@code markPrice} instead of the live low
+	 * price. Used by notification rules so an item's profit can be evaluated
+	 * against a selected time window's average price.
+	 */
+	public long getProfitAt(long markPrice)
+	{
+		long sum = getRealizedProfit();
+		for (AcquisitionRecord r : acquisitions)
+		{
+			if (r.getSoldAt() == null)
+			{
+				sum += (long) r.getQuantity() * (markPrice - r.getBoughtAt());
+			}
+		}
+		return sum;
 	}
 }

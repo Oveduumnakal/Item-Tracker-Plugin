@@ -56,6 +56,7 @@ import net.runelite.client.Notifier;
 import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
+import net.runelite.client.config.Notification;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.plugins.Plugin;
@@ -181,13 +182,6 @@ public class ItemTrackerPlugin extends Plugin
 	// Static item metadata (buy limit, alch values) from the Wiki /mapping endpoint.
 	private volatile Map<Integer, WikiRealtimePriceClient.ItemMapping> itemMappings = Collections.emptyMap();
 
-	private boolean valueThresholdNotified = false;
-
-	private boolean valueThresholdPrimed = false;
-
-	private Instant lastThresholdNotification = null;
-	private static final long THRESHOLD_NOTIFY_COOLDOWN_SECONDS = 10;
-
 	@Override
 	protected void startUp() throws Exception
 	{
@@ -198,7 +192,8 @@ public class ItemTrackerPlugin extends Plugin
 				this::removeTrackedItem,
 				this::onAcquisitionsEdited,
 				this::requestDetailData,
-				this::clearAcquisitions
+				this::clearAcquisitions,
+				this::onNotificationsEdited
 		);
 
 		final BufferedImage icon = ImageUtil.loadImageResource(getClass(), "icon.png");
@@ -244,9 +239,6 @@ public class ItemTrackerPlugin extends Plugin
 		containerCounts.clear();
 		runePouchCounts.clear();
 		lastPriceRefresh = null;
-		valueThresholdNotified = false;
-		valueThresholdPrimed = false;
-		lastThresholdNotification = null;
 	}
 
 	@Provides
@@ -276,6 +268,8 @@ public class ItemTrackerPlugin extends Plugin
 		int quantity;
 		boolean costBasisInitialized;
 		List<AcquisitionRecord> acquisitions;
+		List<NotificationRule> notifications;
+		boolean notificationsInitialized;
 	}
 
 	private void loadPersistedItems()
@@ -297,7 +291,7 @@ public class ItemTrackerPlugin extends Plugin
 				{
 					for (PersistedItem p : list)
 					{
-						addTrackedItem(p.itemId, p.quantity, p.acquisitions, p.costBasisInitialized, false, TrackItemMode.TRACK);
+						addTrackedItem(p.itemId, p.quantity, p.acquisitions, p.notifications, p.notificationsInitialized, p.costBasisInitialized, false, TrackItemMode.TRACK);
 					}
 				}
 				return;
@@ -321,6 +315,8 @@ public class ItemTrackerPlugin extends Plugin
 			p.quantity = item.getQuantity();
 			p.costBasisInitialized = item.isCostBasisInitialized();
 			p.acquisitions = item.getAcquisitions();
+			p.notifications = item.getNotifications();
+			p.notificationsInitialized = item.isNotificationsInitialized();
 			list.add(p);
 		}
 		configManager.setRSProfileConfiguration(
@@ -334,15 +330,16 @@ public class ItemTrackerPlugin extends Plugin
 
 	private void addTrackedItem(int itemId, TrackItemMode mode)
 	{
-		addTrackedItem(itemId, 0, null, false, true, mode);
+		addTrackedItem(itemId, 0, null, null, false, false, true, mode);
 	}
 
 	private void addTrackedItem(int itemId, int initialQuantity, List<AcquisitionRecord> records, boolean costBasisInitialized)
 	{
-		addTrackedItem(itemId, initialQuantity, records, costBasisInitialized, true, TrackItemMode.TRACK);
+		addTrackedItem(itemId, initialQuantity, records, null, false, costBasisInitialized, true, TrackItemMode.TRACK);
 	}
 
 	private void addTrackedItem(int itemId, int initialQuantity, List<AcquisitionRecord> records,
+			List<NotificationRule> notifications, boolean notificationsInitialized,
 			boolean costBasisInitialized, boolean syncOnAdd, TrackItemMode mode)
 	{
 		clientThread.invokeLater(() ->
@@ -361,6 +358,11 @@ public class ItemTrackerPlugin extends Plugin
 			{
 				tracked.setAcquisitions(new ArrayList<>(records));
 			}
+			if (notifications != null)
+			{
+				tracked.setNotifications(new ArrayList<>(notifications));
+			}
+			tracked.setNotificationsInitialized(notificationsInitialized);
 			tracked.setCostBasisInitialized(costBasisInitialized);
 			trackedItems.put(itemId, tracked);
 
@@ -582,6 +584,7 @@ public class ItemTrackerPlugin extends Plugin
 		}
 
 		lastPriceRefresh = Instant.now();
+		evaluateNotifications();
 		refreshPanel(true);
 
 		final int detailId = panel.getDetailItemId();
@@ -632,17 +635,12 @@ public class ItemTrackerPlugin extends Plugin
 			case ItemTrackerConfig.KEY_PRICE_REFRESH_SECONDS:
 				scheduleRefresh();
 				return;
-			case ItemTrackerConfig.KEY_NOTIFY_ON_VALUE_THRESHOLD:
-			case ItemTrackerConfig.KEY_VALUE_THRESHOLD:
-				valueThresholdNotified = false;
-				clientThread.invokeLater(this::checkValueThreshold);
-				return;
 			default:
 				refreshPanel();
 		}
 	}
 
-	/** Config keys of the eight "Show {Section}" detail-view ordering dropdowns. */
+	/** Config keys of the nine "Show {Section}" detail-view ordering dropdowns. */
 	private static final java.util.Set<String> SECTION_SLOT_KEYS = java.util.Set.of(
 			ItemTrackerConfig.KEY_SHOW_ITEM_VALUES,
 			ItemTrackerConfig.KEY_SHOW_COLLECTION_VALUES,
@@ -651,6 +649,7 @@ public class ItemTrackerPlugin extends Plugin
 			ItemTrackerConfig.KEY_SHOW_PRICE_GRAPH,
 			ItemTrackerConfig.KEY_SHOW_VOLUME_GRAPH,
 			ItemTrackerConfig.KEY_SHOW_ALCH_INFO,
+			ItemTrackerConfig.KEY_SHOW_NOTIFICATIONS,
 			ItemTrackerConfig.KEY_SHOW_ITEM_LOG);
 
 	/**
@@ -1280,6 +1279,17 @@ public class ItemTrackerPlugin extends Plugin
 		});
 	}
 
+	private void onNotificationsEdited(int itemId)
+	{
+		clientThread.invokeLater(() ->
+		{
+			if (trackedItems.containsKey(itemId))
+			{
+				persistTrackedItems();
+			}
+		});
+	}
+
 	private static final long GLOW_PERIOD_SLOW_MS = 2000;
 	private static final long GLOW_PERIOD_MEDIUM_MS = 1500;
 	private static final long GLOW_PERIOD_FAST_MS = 1000;
@@ -1321,7 +1331,6 @@ public class ItemTrackerPlugin extends Plugin
 
 	private void refreshPanel(boolean pricesUpdated)
 	{
-		checkValueThreshold();
 		final Instant refresh = lastPriceRefresh;
 		final PriceIndicatorMode indicatorMode = pricesUpdated
 				? config.priceChangeIndicator()
@@ -1330,86 +1339,173 @@ public class ItemTrackerPlugin extends Plugin
 		SwingUtilities.invokeLater(() -> panel.rebuild(items, refresh, indicatorMode));
 	}
 
-	private void checkValueThreshold()
+	/**
+	 * Evaluates every item's notification rules and fires those whose condition
+	 * has newly become true. A rule fires once, then stays "armed" until its
+	 * condition goes false again; even then it cannot re-fire until the
+	 * configured cooldown has elapsed since it last fired. Must run on the client
+	 * thread (reads {@link #trackedItems}).
+	 */
+	private void evaluateNotifications()
 	{
-		if (!config.notifyOnValueThreshold().isEnabled())
+		Notification style = config.notificationStyle();
+		if (!style.isEnabled())
 		{
 			return;
 		}
+		long cooldownSeconds = Math.max(0, config.notificationCooldownMinutes()) * 60L;
+		Instant now = Instant.now();
 
-		long threshold = config.valueThreshold();
-		if (threshold <= 0)
+		for (TrackedItem item : trackedItems.values())
 		{
-			return;
-		}
-
-		boolean hasPrices = trackedItems.values().stream().anyMatch(TrackedItem::hasPrices);
-		if (!hasPrices)
-		{
-			return;
-		}
-
-		long totalAvg = trackedItems.values().stream()
-				.mapToLong(TrackedItem::getAvgValue)
-				.sum();
-
-		if (!valueThresholdPrimed)
-		{
-			valueThresholdPrimed = true;
-			valueThresholdNotified = totalAvg > threshold;
-			return;
-		}
-
-		if (totalAvg > threshold)
-		{
-			if (!valueThresholdNotified)
+			for (NotificationRule rule : item.getNotifications())
 			{
-				Instant now = Instant.now();
-				if (lastThresholdNotification != null
-						&& ChronoUnit.SECONDS.between(lastThresholdNotification, now) < THRESHOLD_NOTIFY_COOLDOWN_SECONDS)
+				Boolean condition = evaluateRule(item, rule);
+				if (condition == null)
 				{
-					return;
+					// Required data not ready yet; leave trigger state untouched.
+					continue;
 				}
-
-				valueThresholdNotified = true;
-				lastThresholdNotification = now;
-				notifier.notify(config.notifyOnValueThreshold(),
-						"Total value of tracked items exceeded " + abbreviateGp(threshold) + " gp");
+				if (condition)
+				{
+					if (!rule.isArmed())
+					{
+						boolean cooled = rule.getLastFired() == null
+								|| ChronoUnit.SECONDS.between(rule.getLastFired(), now) >= cooldownSeconds;
+						if (cooled)
+						{
+							notifier.notify(style, notificationText(item, rule));
+							rule.setLastFired(now);
+						}
+						rule.setArmed(true);
+					}
+				}
+				else
+				{
+					rule.setArmed(false);
+				}
 			}
-		}
-		else
-		{
-			valueThresholdNotified = false;
 		}
 	}
 
-	private static String abbreviateGp(long value)
+	/** @return true/false for the rule's condition, or null when it cannot be evaluated yet. */
+	private Boolean evaluateRule(TrackedItem item, NotificationRule rule)
 	{
-		if (value < 1_000)
+		NotificationMetric metric = rule.getMetric();
+		if (metric == null || rule.getOperation() == null)
 		{
-			return String.valueOf(value);
+			// Incomplete (blank) row; nothing to evaluate.
+			return null;
+		}
+		if (metric.isCategorical())
+		{
+			String current = categoryValue(item, metric);
+			if (current == null || rule.getValue() == null)
+			{
+				return null;
+			}
+			return current.equalsIgnoreCase(rule.getValue().trim());
 		}
 
-		double scaled;
-		String suffix;
-		if (value >= 1_000_000_000)
+		TimeWindow window = metric.locksTimeframeToMonth() ? TimeWindow.MONTH : rule.getTimeWindow();
+		OptionalDouble current = numericValue(item, metric, window);
+		if (!current.isPresent())
 		{
-			scaled = value / 1_000_000_000.0;
-			suffix = "b";
+			return null;
 		}
-		else if (value >= 1_000_000)
+		OptionalDouble target = metric.getKind() == NotificationMetric.Kind.PERCENT
+				? NotificationRule.parsePercent(rule.getValue())
+				: NotificationRule.parseNumeric(rule.getValue());
+		if (!target.isPresent())
 		{
-			scaled = value / 1_000_000.0;
-			suffix = "m";
+			return null;
+		}
+		return rule.getOperation().test(current.getAsDouble(), target.getAsDouble());
+	}
+
+	private OptionalDouble numericValue(TrackedItem item, NotificationMetric metric, TimeWindow window)
+	{
+		if (metric == NotificationMetric.QUANTITY)
+		{
+			return OptionalDouble.of(item.getQuantity());
+		}
+
+		PriceStats s = item.getWindowStats().get(window);
+		long avg = s == null ? 0 : s.getAvg();
+		switch (metric)
+		{
+			case HIGH:
+				return s == null ? OptionalDouble.empty() : OptionalDouble.of(s.getHigh());
+			case LOW:
+				return s == null ? OptionalDouble.empty() : OptionalDouble.of(s.getLow());
+			case AVERAGE:
+				return s == null ? OptionalDouble.empty() : OptionalDouble.of(s.getAvg());
+			case VOLUME:
+				return s == null ? OptionalDouble.empty() : OptionalDouble.of(s.getVolume());
+			case ITM_PROFIT:
+				return avg <= 0 ? OptionalDouble.empty() : OptionalDouble.of(item.getProfitAt(avg));
+			case HA_PROFIT:
+				if (avg <= 0 || item.getHighAlch() <= 0)
+				{
+					return OptionalDouble.empty();
+				}
+				return OptionalDouble.of(item.getHighAlch() - avg - runePrice(NATURE_RUNE_ID) - 5 * runePrice(FIRE_RUNE_ID));
+			case DELTA_PCT:
+			{
+				long current = item.getAvgPrice();
+				if (current <= 0 || avg <= 0)
+				{
+					return OptionalDouble.empty();
+				}
+				return OptionalDouble.of(Math.round(((double) (current - avg) / avg) * 1000.0) / 10.0);
+			}
+			default:
+				return OptionalDouble.empty();
+		}
+	}
+
+	private String categoryValue(TrackedItem item, NotificationMetric metric)
+	{
+		switch (metric)
+		{
+			case VOLATILITY:
+				return MarketClassifier.volatility(item.getSeriesFor(TimeWindow.WEEK));
+			case LIQUIDITY:
+			{
+				PriceStats s = item.getWindowStats().get(TimeWindow.H24);
+				return MarketClassifier.liquidity(s == null ? 0 : s.getVolume());
+			}
+			case RANGE_30D:
+			{
+				long[] range = MarketClassifier.thirtyDayRange(item.getSeriesFor(TimeWindow.MONTH));
+				return MarketClassifier.rangePosition(range[0], range[1], item.getAvgPrice());
+			}
+			default:
+				return null;
+		}
+	}
+
+	private String notificationText(TrackedItem item, NotificationRule rule)
+	{
+		NotificationMetric metric = rule.getMetric();
+		String valueDisplay;
+		if (metric.isCategorical())
+		{
+			valueDisplay = rule.getValue();
+		}
+		else if (metric.getKind() == NotificationMetric.Kind.PERCENT)
+		{
+			OptionalDouble v = NotificationRule.parsePercent(rule.getValue());
+			valueDisplay = v.isPresent() ? NotificationRule.formatPercent(v.getAsDouble()) : rule.getValue();
 		}
 		else
 		{
-			scaled = value / 1_000.0;
-			suffix = "k";
+			OptionalDouble v = NotificationRule.parseNumeric(rule.getValue());
+			valueDisplay = v.isPresent()
+					? String.format(Locale.US, "%,d", Math.round(v.getAsDouble()))
+					: rule.getValue();
 		}
-
-		String s = String.format("%.2f", scaled);
-		s = s.replaceAll("0+$", "").replaceAll("\\.$", "");
-		return s + suffix;
+		return "Item Tracker: " + item.getName() + " - " + metric.getDisplayName()
+				+ " " + rule.getOperation().getSymbol() + " " + valueDisplay;
 	}
 }

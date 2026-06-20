@@ -63,9 +63,12 @@ public interface ItemTrackerConfig extends Config
 	String KEY_SHOW_PRICE_GRAPH = "showPriceGraph";
 	String KEY_SHOW_VOLUME_GRAPH = "showVolumeGraph";
 	String KEY_SHOW_ALCH_INFO = "showAlchInfo";
+	String KEY_SHOW_NOTIFICATIONS = "showNotifications";
 	String KEY_SHOW_ITEM_LOG = "showItemLog";
 	String KEY_PRICE_OVERVIEW_ROWS = "priceOverviewPreset";
 	String KEY_AUTO_ADD_ITEMS = "autoAddItems";
+	String KEY_NOTIFICATION_STYLE = "notificationStyle";
+	String KEY_NOTIFICATION_COOLDOWN_MINUTES = "notificationCooldownMinutes";
 
 	// Section 4: GE Estimates Display
 	String KEY_SHOW_GE_ESTIMATES = "showGeEstimates";
@@ -83,10 +86,6 @@ public interface ItemTrackerConfig extends Config
 	String KEY_HIGHLIGHT_TRACKED_ITEMS = "highlightTrackedItems";
 	String KEY_HIGHLIGHT_COLOR = "highlightColor";
 	String KEY_GLOW_EFFECT = "glowEffect";
-
-	// Section 6: Notifications
-	String KEY_NOTIFY_ON_VALUE_THRESHOLD = "notifyOnValueThreshold";
-	String KEY_VALUE_THRESHOLD = "valueThreshold";
 
 	@ConfigSection(
 			name = "Main View Settings",
@@ -122,13 +121,6 @@ public interface ItemTrackerConfig extends Config
 			position = 4
 	)
 	String detailViewSection = "detailView";
-
-	@ConfigSection(
-			name = "Notifications",
-			description = "Value threshold notification settings",
-			position = 5
-	)
-	String notificationsSection = "notifications";
 
 	// ---- Section 1: Main View Settings ----
 
@@ -354,15 +346,28 @@ public interface ItemTrackerConfig extends Config
 	}
 
 	@ConfigItem(
+			keyName = KEY_SHOW_NOTIFICATIONS,
+			name = "Show Notifications",
+			description = "Position of the per-item notification rule editor, or None to hide it. "
+					+ "Does not enable or disable notifications — use the \"Notifications\" setting for that.",
+			section = detailViewSection,
+			position = 7
+	)
+	default SectionSlot showNotifications()
+	{
+		return SectionSlot.EIGHTH;
+	}
+
+	@ConfigItem(
 			keyName = KEY_SHOW_ITEM_LOG,
 			name = "Show Item Log",
 			description = "Position of the Item Collection Log section, or None to hide it",
 			section = detailViewSection,
-			position = 7
+			position = 9
 	)
 	default SectionSlot showItemLog()
 	{
-		return SectionSlot.EIGHTH;
+		return SectionSlot.NINTH;
 	}
 
 	@ConfigItem(
@@ -371,7 +376,7 @@ public interface ItemTrackerConfig extends Config
 			description = "How many time-window rows the Price Overview shows. "
 					+ "Recent: 5m, 1h, 12h, 24hr. Standard: 5m, 1h, 24hr, 1wk, 1mo. Detailed: all windows.",
 			section = detailViewSection,
-			position = 8
+			position = 10
 	)
 	default OverviewPreset priceOverviewRows()
 	{
@@ -384,11 +389,38 @@ public interface ItemTrackerConfig extends Config
 			description = "Automatically add collection-log entries from inventory/bank changes, and the price they buy in at. "
 					+ "High/Low/Avg use the latest matching price, Zero buys in at 0, Off disables auto-adds (manual edits still work).",
 			section = detailViewSection,
-			position = 9
+			position = 11
 	)
 	default AutoAddMode autoAddItems()
 	{
 		return AutoAddMode.AVG;
+	}
+
+	@ConfigItem(
+			keyName = KEY_NOTIFICATION_STYLE,
+			name = "Notifications",
+			description = "Master switch and delivery style for per-item notifications. Set to Off to disable "
+					+ "all item notifications; otherwise use the gear to choose how they are delivered. "
+					+ "Independent of \"Show Notifications\", which only controls where the rule editor appears.",
+			section = detailViewSection,
+			position = 12
+	)
+	default Notification notificationStyle()
+	{
+		return Notification.ON;
+	}
+
+	@Range(min = 0)
+	@ConfigItem(
+			keyName = KEY_NOTIFICATION_COOLDOWN_MINUTES,
+			name = "Notif. Cooldown",
+			description = "Minimum minutes that must pass before the same rule can fire again after its condition resets",
+			section = detailViewSection,
+			position = 13
+	)
+	default int notificationCooldownMinutes()
+	{
+		return 5;
 	}
 
 	// ---- Section 4: GE Estimates Display ----
@@ -549,32 +581,5 @@ public interface ItemTrackerConfig extends Config
 	default GlowSpeed glowEffect()
 	{
 		return GlowSpeed.MEDIUM;
-	}
-
-	// ---- Section 6: Notifications ----
-
-	@ConfigItem(
-			keyName = KEY_NOTIFY_ON_VALUE_THRESHOLD,
-			name = "Enable Notification",
-			description = "Send a notification when the total average value exceeds the threshold",
-			section = notificationsSection,
-			position = 0
-	)
-	default Notification notifyOnValueThreshold()
-	{
-		return Notification.OFF;
-	}
-
-	@Range(min = 0)
-	@ConfigItem(
-			keyName = KEY_VALUE_THRESHOLD,
-			name = "Threshold",
-			description = "Total average value (gp) that triggers the notification",
-			section = notificationsSection,
-			position = 1
-	)
-	default int valueThreshold()
-	{
-		return 0;
 	}
 }

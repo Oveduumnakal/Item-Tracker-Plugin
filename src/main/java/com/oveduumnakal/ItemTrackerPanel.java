@@ -42,11 +42,15 @@ import javax.swing.event.DocumentListener;
 import javax.swing.event.TableModelEvent;
 import javax.swing.table.AbstractTableModel;
 import javax.swing.table.DefaultTableCellRenderer;
+import javax.swing.table.TableCellEditor;
 import javax.swing.table.JTableHeader;
 import javax.swing.table.TableCellRenderer;
+import javax.swing.table.TableColumn;
 import java.awt.*;
 import java.awt.image.BufferedImage;
 import java.awt.event.ActionEvent;
+import java.awt.event.ComponentAdapter;
+import java.awt.event.ComponentEvent;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
@@ -90,9 +94,27 @@ public class ItemTrackerPanel extends PluginPanel
 	private final Consumer<Integer> onAcquisitionsEdited;
 	private final Consumer<Integer> onRequestDetailData;
 	private final Consumer<Integer> onClearAcquisitions;
+	private final Consumer<Integer> onNotificationsEdited;
 
 	private final CardLayout cardLayout = new CardLayout();
-	private final JPanel cardsHost = new JPanel(cardLayout);
+	// CardLayout sizes to the largest card, which would make the (shorter) main
+	// view inherit the detail view's height and show a needless scrollbar. Report
+	// only the visible card's preferred size so each view scrolls on its own merit.
+	private final JPanel cardsHost = new JPanel(cardLayout)
+	{
+		@Override
+		public Dimension getPreferredSize()
+		{
+			for (Component c : getComponents())
+			{
+				if (c.isVisible())
+				{
+					return c.getPreferredSize();
+				}
+			}
+			return super.getPreferredSize();
+		}
+	};
 	private static final String CARD_MAIN = "main";
 	private static final String CARD_DETAIL = "detail";
 
@@ -144,6 +166,16 @@ public class ItemTrackerPanel extends PluginPanel
 	private int acqHoverCol = -1;
 	private JScrollPane acquisitionsScroll;
 	private JPanel acquisitionsSection;
+	private NotificationsTableModel notificationsModel;
+	private JTable notificationsTable;
+	private JPanel notificationsSection;
+	private static final int DEFAULT_NOTIFICATION_ROWS = 5;
+	// Collection-log pop-out: a second table sharing the same item data, plus the
+	// header button that opens it (shown only while the table is scrollable).
+	private JButton acqPopoutButton;
+	private AcquisitionsTableModel acqPopoutModel;
+	private JTable acqPopoutTable;
+	private JScrollPane acqPopoutScroll;
 	private JPanel overviewGrid;
 	private PriceGraphPanel priceGraph;
 	private PriceGraphPanel volumeGraph;
@@ -245,7 +277,8 @@ public class ItemTrackerPanel extends PluginPanel
 			Consumer<Integer> onRemoveItem,
 			Consumer<Integer> onAcquisitionsEdited,
 			Consumer<Integer> onRequestDetailData,
-			Consumer<Integer> onClearAcquisitions)
+			Consumer<Integer> onClearAcquisitions,
+			Consumer<Integer> onNotificationsEdited)
 	{
 		this.itemManager = itemManager;
 		this.config = config;
@@ -254,6 +287,7 @@ public class ItemTrackerPanel extends PluginPanel
 		this.onAcquisitionsEdited = onAcquisitionsEdited;
 		this.onRequestDetailData = onRequestDetailData;
 		this.onClearAcquisitions = onClearAcquisitions;
+		this.onNotificationsEdited = onNotificationsEdited;
 
 		setLayout(new BorderLayout(0, 8));
 		setBorder(new EmptyBorder(10, 10, 10, 10));
@@ -756,8 +790,11 @@ public class ItemTrackerPanel extends PluginPanel
 			{
 				SwingUtilities.invokeLater(() -> populateDetail(detail));
 			}
-			else
+			else if (!currentItems.isEmpty())
 			{
+				// The item is genuinely gone (e.g. it was untracked), so leave the
+				// detail view. An empty list is a transient loading/refresh state and
+				// must not bounce us back to the main view.
 				SwingUtilities.invokeLater(this::showMain);
 			}
 		}
@@ -1511,6 +1548,22 @@ public class ItemTrackerPanel extends PluginPanel
 
 		priceGraph = new PriceGraphPanel(PriceGraphPanel.Mode.PRICE);
 		priceGraph.setAlignmentX(Component.LEFT_ALIGNMENT);
+		priceGraph.setSmooth(graphSmooth);
+		priceGraph.setSmoothListener(b -> {
+			graphSmooth = b;
+			if (pricePopoutGraph != null)
+			{
+				pricePopoutGraph.setSmooth(b);
+			}
+		});
+		priceGraph.setLineSet(graphLineSet);
+		priceGraph.setLineSetListener(set -> {
+			graphLineSet = set;
+			if (pricePopoutGraph != null)
+			{
+				pricePopoutGraph.setLineSet(set);
+			}
+		});
 		priceGraphSection = buildDetailSectionWithPopout("Price Graph",
 				() -> openGraphPopout("Price Graph", PriceGraphPanel.Mode.PRICE, priceGraph),
 				priceGraph, Box.createVerticalStrut(4));
@@ -1592,6 +1645,7 @@ public class ItemTrackerPanel extends PluginPanel
 		});
 		acquisitionsTable.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 		acquisitionsTable.setForeground(Color.WHITE);
+		acquisitionsTable.setFont(FontManager.getRunescapeSmallFont());
 		acquisitionsTable.setGridColor(new Color(60, 60, 60));
 		acquisitionsTable.setRowHeight(22);
 		acquisitionsTable.setFillsViewportHeight(true);
@@ -1787,17 +1841,183 @@ public class ItemTrackerPanel extends PluginPanel
 		tableButtons.add(cleanBtn);
 		tableButtons.add(clearBtn);
 
+		// Title with a pop-out button that only appears while the table is scrollable.
+		acqPopoutButton = buildPopoutButton(this::openCollectionLogPopout);
+		acqPopoutButton.setVisible(false);
+		JComponent logTitle = buildDetailSectionTitleRow("Item Collection Log", acqPopoutButton);
+		tableScroll.getVerticalScrollBar().addComponentListener(new ComponentAdapter()
+		{
+			@Override
+			public void componentShown(ComponentEvent e)
+			{
+				updateAcqPopoutButton();
+			}
+
+			@Override
+			public void componentHidden(ComponentEvent e)
+			{
+				updateAcqPopoutButton();
+			}
+		});
+
 		acquisitionsSection = new JPanel(new BorderLayout(0, 4));
 		acquisitionsSection.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		acquisitionsSection.setAlignmentX(Component.LEFT_ALIGNMENT);
-		acquisitionsSection.add(buildDetailSectionTitle("Item Collection Log", true), BorderLayout.NORTH);
+		acquisitionsSection.add(logTitle, BorderLayout.NORTH);
 		acquisitionsSection.add(tableScroll, BorderLayout.CENTER);
 		acquisitionsSection.add(tableButtons, BorderLayout.SOUTH);
+
+		buildNotificationsSection();
 
 		// Populate the overview rows and order/visibility from config now that
 		// every section wrapper exists.
 		rebuildOverviewGrid();
 		applyDetailSectionLayout();
+	}
+
+	/**
+	 * Builds the per-item Notifications section: a collection-log-style table of
+	 * rules (Metric / Time Frame / Operation / Value) with combo-box editors,
+	 * add/remove/clear buttons, and a gear in the header linking to the shared
+	 * notification settings.
+	 */
+	private void buildNotificationsSection()
+	{
+		notificationsModel = new NotificationsTableModel();
+		notificationsTable = new JTable(notificationsModel)
+		{
+			@Override
+			public Dimension getPreferredScrollableViewportSize()
+			{
+				return new Dimension(getPreferredSize().width,
+						Math.min(getPreferredSize().height, getRowHeight() * DEFAULT_NOTIFICATION_ROWS + 2));
+			}
+		};
+		notificationsTable.setFillsViewportHeight(true);
+		notificationsTable.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		notificationsTable.setForeground(Color.WHITE);
+		notificationsTable.setGridColor(new Color(60, 60, 60));
+		notificationsTable.setRowHeight(22);
+		notificationsTable.setFont(FontManager.getRunescapeSmallFont());
+		notificationsTable.getTableHeader().setFont(FontManager.getRunescapeSmallFont());
+		notificationsTable.getTableHeader().setReorderingAllowed(false);
+		notificationsTable.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
+		applyNotificationRenderers();
+
+		JScrollPane tableScroll = new JScrollPane(notificationsTable);
+		tableScroll.getViewport().setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		tableScroll.setBorder(BorderFactory.createLineBorder(new Color(60, 60, 60)));
+
+		JButton addRowBtn = new JButton("+ Add");
+		styleNotifButton(addRowBtn, Color.WHITE);
+		addRowBtn.addActionListener(e -> {
+			TrackedItem t = currentItems.get(detailItemId);
+			if (t == null) return;
+			t.getNotifications().add(new NotificationRule());
+			notificationsModel.fireTableDataChanged();
+			notificationsTable.revalidate();
+			notifyNotificationsEdited();
+		});
+
+		JButton removeRowBtn = new JButton("− Remove");
+		styleNotifButton(removeRowBtn, Color.WHITE);
+		removeRowBtn.setEnabled(false);
+		Runnable removeSelected = () -> {
+			TrackedItem t = currentItems.get(detailItemId);
+			if (t == null) return;
+			if (notificationsTable.isEditing())
+			{
+				notificationsTable.getCellEditor().stopCellEditing();
+			}
+			int[] selected = notificationsTable.getSelectedRows();
+			if (selected.length == 0) return;
+			List<NotificationRule> rules = t.getNotifications();
+			java.util.Arrays.sort(selected);
+			for (int i = selected.length - 1; i >= 0; i--)
+			{
+				int idx = selected[i];
+				if (idx >= 0 && idx < rules.size())
+				{
+					rules.remove(idx);
+				}
+			}
+			// Keep at least the blank default rows so the section never collapses
+			// below its ready-to-fill layout.
+			while (rules.size() < DEFAULT_NOTIFICATION_ROWS)
+			{
+				rules.add(new NotificationRule());
+			}
+			notificationsModel.fireTableDataChanged();
+			notificationsTable.revalidate();
+			notifyNotificationsEdited();
+		};
+		removeRowBtn.addActionListener(e -> removeSelected.run());
+		notificationsTable.getSelectionModel().addListSelectionListener(e ->
+				removeRowBtn.setEnabled(notificationsTable.getSelectedRowCount() > 0));
+		notificationsTable.getInputMap(JComponent.WHEN_FOCUSED)
+				.put(KeyStroke.getKeyStroke(KeyEvent.VK_DELETE, 0), "deleteSelectedRules");
+		notificationsTable.getActionMap().put("deleteSelectedRules", new AbstractAction()
+		{
+			@Override
+			public void actionPerformed(ActionEvent e)
+			{
+				removeSelected.run();
+			}
+		});
+
+		JButton clearBtn = new JButton("Clear");
+		styleNotifButton(clearBtn, new Color(220, 100, 100));
+		clearBtn.setToolTipText("Remove every notification rule");
+		clearBtn.addActionListener(e -> {
+			TrackedItem t = currentItems.get(detailItemId);
+			if (t == null || t.getNotifications().isEmpty()) return;
+			int choice = JOptionPane.showConfirmDialog(this,
+					"Remove all notification rules for this item?",
+					"Clear Notifications", JOptionPane.YES_NO_OPTION);
+			if (choice != JOptionPane.YES_OPTION) return;
+			t.getNotifications().clear();
+			// Reset straight back to blank default rows instead of leaving the
+			// section collapsed and empty until the next refresh re-seeds it.
+			for (int i = 0; i < DEFAULT_NOTIFICATION_ROWS; i++)
+			{
+				t.getNotifications().add(new NotificationRule());
+			}
+			notificationsModel.fireTableDataChanged();
+			notificationsTable.revalidate();
+			notifyNotificationsEdited();
+		});
+
+		JPanel tableButtons = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+		tableButtons.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		tableButtons.setBorder(new EmptyBorder(4, 0, 4, 0));
+		tableButtons.add(addRowBtn);
+		tableButtons.add(removeRowBtn);
+		tableButtons.add(clearBtn);
+
+		notificationsSection = new JPanel(new BorderLayout(0, 4));
+		notificationsSection.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		notificationsSection.setAlignmentX(Component.LEFT_ALIGNMENT);
+		notificationsSection.add(buildDetailSectionTitle("Notifications", true), BorderLayout.NORTH);
+		notificationsSection.add(tableScroll, BorderLayout.CENTER);
+		notificationsSection.add(tableButtons, BorderLayout.SOUTH);
+	}
+
+	private void styleNotifButton(JButton btn, Color fg)
+	{
+		btn.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		btn.setForeground(fg);
+		btn.setFocusPainted(false);
+		btn.setFont(FontManager.getRunescapeSmallFont());
+		btn.setMargin(new Insets(2, 5, 2, 5));
+		btn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+	}
+
+	private void notifyNotificationsEdited()
+	{
+		if (onNotificationsEdited != null && detailItemId > 0)
+		{
+			onNotificationsEdited.accept(detailItemId);
+		}
 	}
 
 	/**
@@ -1840,8 +2060,11 @@ public class ItemTrackerPanel extends PluginPanel
 	/** Section header with a centred title and a pop-out button on the right. */
 	private JComponent buildDetailSectionTitleRow(String title, Runnable onPopout)
 	{
-		JButton popBtn = buildPopoutButton(onPopout);
+		return buildDetailSectionTitleRow(title, buildPopoutButton(onPopout));
+	}
 
+	private JComponent buildDetailSectionTitleRow(String title, JButton popBtn)
+	{
 		JPanel row = new JPanel(new BorderLayout())
 		{
 			@Override
@@ -1884,12 +2107,13 @@ public class ItemTrackerPanel extends PluginPanel
 
 		JPanel[] sections = {
 				itemValuesSection, ccvSection, marketInfoSection, priceOverviewSection,
-				priceGraphSection, volumeGraphSection, alchInfoSection, acquisitionsSection
+				priceGraphSection, volumeGraphSection, alchInfoSection, notificationsSection,
+				acquisitionsSection
 		};
 		SectionSlot[] slots = {
 				config.showItemValues(), config.showCollectionValues(), config.showMarketInfo(),
 				config.showPriceOverview(), config.showPriceGraph(), config.showVolumeGraph(),
-				config.showAlchInfo(), config.showItemLog()
+				config.showAlchInfo(), config.showNotifications(), config.showItemLog()
 		};
 
 		StringBuilder sig = new StringBuilder();
@@ -2286,15 +2510,24 @@ public class ItemTrackerPanel extends PluginPanel
 	{
 		final JFrame frame;
 		final Consumer<TrackedItem> refresher;
+		final Runnable onClose;
 
-		PopoutHandle(JFrame frame, Consumer<TrackedItem> refresher)
+		PopoutHandle(JFrame frame, Consumer<TrackedItem> refresher, Runnable onClose)
 		{
 			this.frame = frame;
 			this.refresher = refresher;
+			this.onClose = onClose;
 		}
 	}
 
 	private final List<PopoutHandle> openPopouts = new ArrayList<>();
+
+	// Shared "smooth lines" preference for the price graph, remembered as the
+	// sidebar and pop-out graphs open and close. pricePopoutGraph tracks the open
+	// price pop-out (if any) so a sidebar toggle can sync it live.
+	private boolean graphSmooth = true;
+	private PriceGraphPanel.LineSet graphLineSet = PriceGraphPanel.LineSet.ALL;
+	private PriceGraphPanel pricePopoutGraph;
 
 	/** Pushes the on-screen detail item into every open pop-out window. */
 	private void refreshPopouts(TrackedItem item)
@@ -2318,8 +2551,9 @@ public class ItemTrackerPanel extends PluginPanel
 	/**
 	 * Opens {@code content} in a resizable window, seeds it from the current
 	 * detail item, and keeps it updated until it (or the detail view) closes.
+	 * {@code onClose} runs when the window is disposed.
 	 */
-	private void showPopout(String title, JComponent content, Consumer<TrackedItem> refresher)
+	private void showPopout(String title, JComponent content, Consumer<TrackedItem> refresher, Runnable onClose)
 	{
 		JPanel holder = new JPanel(new BorderLayout());
 		holder.setBackground(ColorScheme.DARKER_GRAY_COLOR);
@@ -2340,7 +2574,7 @@ public class ItemTrackerPanel extends PluginPanel
 		frame.pack();
 		frame.setLocationRelativeTo(SwingUtilities.getWindowAncestor(this));
 
-		PopoutHandle handle = new PopoutHandle(frame, refresher);
+		PopoutHandle handle = new PopoutHandle(frame, refresher, onClose);
 		openPopouts.add(handle);
 		frame.addWindowListener(new WindowAdapter()
 		{
@@ -2348,6 +2582,10 @@ public class ItemTrackerPanel extends PluginPanel
 			public void windowClosed(WindowEvent e)
 			{
 				openPopouts.remove(handle);
+				if (onClose != null)
+				{
+					onClose.run();
+				}
 			}
 		});
 
@@ -2360,9 +2598,34 @@ public class ItemTrackerPanel extends PluginPanel
 		PriceGraphPanel graph = new PriceGraphPanel(mode, true);
 		graph.setActiveWindow(source.getActiveWindow());
 		graph.setPreferredSize(new Dimension(640, mode == PriceGraphPanel.Mode.PRICE ? 460 : 360));
+
+		Runnable onClose = null;
+		if (mode == PriceGraphPanel.Mode.PRICE)
+		{
+			// Carry the remembered smoothing and line-set state in, and keep the
+			// sidebar graph (and shared preferences) in sync when toggled here.
+			graph.setSmooth(graphSmooth);
+			graph.setSmoothListener(b -> {
+				graphSmooth = b;
+				source.setSmooth(b);
+			});
+			graph.setLineSet(graphLineSet);
+			graph.setLineSetListener(set -> {
+				graphLineSet = set;
+				source.setLineSet(set);
+			});
+			pricePopoutGraph = graph;
+			onClose = () -> {
+				if (pricePopoutGraph == graph)
+				{
+					pricePopoutGraph = null;
+				}
+			};
+		}
+
 		Consumer<TrackedItem> refresher = it -> graph.setData(
 				it.getSeries5m(), it.getSeries1h(), it.getSeries6h(), it.getSeries24h(), it.getAvgPrice());
-		showPopout(title, graph, refresher);
+		showPopout(title, graph, refresher, onClose);
 	}
 
 	/** Opens a larger, live copy of the Price Overview table. */
@@ -2387,7 +2650,226 @@ public class ItemTrackerPanel extends PluginPanel
 		scroll.getViewport().setBackground(ColorScheme.DARKER_GRAY_COLOR);
 
 		Consumer<TrackedItem> refresher = it -> populateOverviewLabels(labels, it, true);
-		showPopout("Price Overview", scroll, refresher);
+		showPopout("Price Overview", scroll, refresher, null);
+	}
+
+	/** Shows the title pop-out button whenever the log is docked (not popped out). */
+	private void updateAcqPopoutButton()
+	{
+		if (acqPopoutButton == null)
+		{
+			return;
+		}
+		acqPopoutButton.setVisible(acqPopoutModel == null);
+	}
+
+	/**
+	 * Opens a larger Collection Log in its own window: a second table sharing the
+	 * same item data, with full-format numbers, spelled-out headers, and the same
+	 * Add/Remove/Clean/Clear actions. Edits route through onAcquisitionsEdited, so
+	 * the docked and popped-out tables stay in sync.
+	 */
+	private void openCollectionLogPopout()
+	{
+		if (acqPopoutModel != null)
+		{
+			return;
+		}
+
+		acqPopoutModel = new AcquisitionsTableModel();
+		acqPopoutTable = new JTable(acqPopoutModel);
+		final JTable table = acqPopoutTable;
+		final AcquisitionsTableModel model = acqPopoutModel;
+		table.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		table.setForeground(Color.WHITE);
+		table.setGridColor(new Color(60, 60, 60));
+		table.setFillsViewportHeight(true);
+		table.getTableHeader().setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		table.getTableHeader().setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		table.getTableHeader().setReorderingAllowed(false);
+		model.setItem(currentItems.get(detailItemId));
+		applyAcqRenderers(table, model, true);
+
+		// Double-click below the rows adds a new row, matching the docked table.
+		table.addMouseListener(new MouseAdapter()
+		{
+			@Override
+			public void mouseClicked(MouseEvent e)
+			{
+				if (e.getClickCount() == 2 && e.getButton() == MouseEvent.BUTTON1
+						&& table.rowAtPoint(e.getPoint()) < 0)
+				{
+					acqAddRow(table, model);
+				}
+			}
+		});
+
+		JScrollPane scroll = new JScrollPane(table);
+		scroll.getViewport().setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		scroll.setBorder(BorderFactory.createLineBorder(new Color(60, 60, 60)));
+		scroll.setPreferredSize(new Dimension(560, 380));
+		acqPopoutScroll = scroll;
+
+		JButton addBtn = acqTextButton("+ Add", Color.WHITE);
+		addBtn.addActionListener(e -> acqAddRow(table, model));
+
+		JButton removeBtn = acqTextButton("− Remove", Color.WHITE);
+		removeBtn.setEnabled(false);
+		removeBtn.addActionListener(e -> acqRemoveSelected(table, model));
+		table.getSelectionModel().addListSelectionListener(e ->
+				removeBtn.setEnabled(table.getSelectedRowCount() > 0));
+		table.getInputMap(JComponent.WHEN_FOCUSED)
+				.put(KeyStroke.getKeyStroke(KeyEvent.VK_DELETE, 0), "deleteSelectedRows");
+		table.getActionMap().put("deleteSelectedRows", new AbstractAction()
+		{
+			@Override
+			public void actionPerformed(ActionEvent e)
+			{
+				acqRemoveSelected(table, model);
+			}
+		});
+
+		JButton cleanBtn = new JButton(buildBrushIcon());
+		cleanBtn.setToolTipText("Remove all rows with quantity 0");
+		cleanBtn.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		cleanBtn.setForeground(Color.WHITE);
+		cleanBtn.setFocusPainted(false);
+		cleanBtn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+		cleanBtn.setMargin(new Insets(2, 4, 2, 4));
+		cleanBtn.addActionListener(e -> acqClean(model));
+
+		JButton clearBtn = acqTextButton("Clear", new Color(220, 100, 100));
+		clearBtn.setToolTipText("Remove every row from the collection log");
+		clearBtn.addActionListener(e -> acqClear());
+
+		JButton[] btns = {addBtn, removeBtn, cleanBtn, clearBtn};
+		int btnHeight = 0;
+		for (JButton b : btns)
+		{
+			btnHeight = Math.max(btnHeight, b.getPreferredSize().height);
+		}
+		for (JButton b : btns)
+		{
+			b.setPreferredSize(new Dimension(b.getPreferredSize().width, btnHeight));
+		}
+
+		JPanel buttons = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+		buttons.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		buttons.setBorder(new EmptyBorder(4, 0, 0, 0));
+		for (JButton b : btns)
+		{
+			buttons.add(b);
+		}
+
+		JPanel content = new JPanel(new BorderLayout(0, 6));
+		content.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		content.add(scroll, BorderLayout.CENTER);
+		content.add(buttons, BorderLayout.SOUTH);
+
+		updateAcqPopoutButton();
+
+		showPopout("Item Collection Log", content, it -> { }, () -> {
+			acqPopoutModel = null;
+			acqPopoutTable = null;
+			acqPopoutScroll = null;
+			updateAcqPopoutButton();
+		});
+	}
+
+	private JButton acqTextButton(String text, Color fg)
+	{
+		JButton b = new JButton(text);
+		b.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		b.setForeground(fg);
+		b.setFocusPainted(false);
+		b.setFont(FontManager.getRunescapeSmallFont());
+		b.setMargin(new Insets(2, 5, 2, 5));
+		b.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+		return b;
+	}
+
+	// ---- Shared collection-log mutations (used by the pop-out table) ----
+
+	private void acqAddRow(JTable table, AcquisitionsTableModel model)
+	{
+		TrackedItem t = currentItems.get(detailItemId);
+		if (t == null) return;
+		long price = t.getAvgPrice() > 0 ? t.getAvgPrice() : 0;
+		t.getAcquisitions().add(new AcquisitionRecord(0, price, null));
+		model.fireTableDataChanged();
+		table.revalidate();
+		onAcquisitionsEdited.accept(detailItemId);
+		JScrollPane sp = (JScrollPane) SwingUtilities.getAncestorOfClass(JScrollPane.class, table);
+		if (sp != null)
+		{
+			SwingUtilities.invokeLater(() ->
+			{
+				JScrollBar bar = sp.getVerticalScrollBar();
+				bar.setValue(bar.getMaximum());
+			});
+		}
+		int newRow = model.getRowCount() - 1;
+		if (newRow >= 0 && table.editCellAt(newRow, 0))
+		{
+			table.changeSelection(newRow, 0, false, false);
+			Component editor = table.getEditorComponent();
+			if (editor != null)
+			{
+				editor.requestFocusInWindow();
+			}
+		}
+	}
+
+	private void acqRemoveSelected(JTable table, AcquisitionsTableModel model)
+	{
+		TrackedItem t = currentItems.get(detailItemId);
+		if (t == null) return;
+		if (table.isEditing())
+		{
+			table.getCellEditor().stopCellEditing();
+		}
+		int[] selected = table.getSelectedRows();
+		if (selected.length == 0) return;
+		List<AcquisitionRecord> records = t.getAcquisitions();
+		java.util.Arrays.sort(selected);
+		for (int i = selected.length - 1; i >= 0; i--)
+		{
+			if (selected[i] >= 0 && selected[i] < records.size())
+			{
+				records.remove(selected[i]);
+			}
+		}
+		model.fireTableDataChanged();
+		table.revalidate();
+		onAcquisitionsEdited.accept(detailItemId);
+	}
+
+	private void acqClean(AcquisitionsTableModel model)
+	{
+		TrackedItem t = currentItems.get(detailItemId);
+		if (t == null) return;
+		if (t.getAcquisitions().removeIf(r -> r.getQuantity() == 0))
+		{
+			model.fireTableDataChanged();
+			onAcquisitionsEdited.accept(detailItemId);
+		}
+	}
+
+	private void acqClear()
+	{
+		TrackedItem t = currentItems.get(detailItemId);
+		if (t == null || t.getAcquisitions().isEmpty()) return;
+		int choice = JOptionPane.showConfirmDialog(
+				ItemTrackerPanel.this,
+				"Clear the entire collection log for this item?",
+				"Clear Collection Log",
+				JOptionPane.YES_NO_OPTION,
+				JOptionPane.WARNING_MESSAGE);
+		if (choice != JOptionPane.YES_OPTION) return;
+		if (onClearAcquisitions != null)
+		{
+			onClearAcquisitions.accept(detailItemId);
+		}
 	}
 
 	/** Small "open in a larger window" icon for a section header. */
@@ -2419,6 +2901,40 @@ public class ItemTrackerPanel extends PluginPanel
 		btn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 		btn.addActionListener(e -> onClick.run());
 		return btn;
+	}
+
+	/**
+	 * Applies fonts, renderers and combo-box editors to the Notifications table.
+	 * Metric / Time Frame / Operation are fixed dropdowns; the Value column uses a
+	 * per-row editor that switches between a dropdown (categorical metrics) and a
+	 * text field (numeric metrics).
+	 */
+	private void applyNotificationRenderers()
+	{
+		Font f = FontManager.getRunescapeSmallFont();
+		NotifCellRenderer renderer = new NotifCellRenderer();
+
+		JComboBox<NotificationMetric> metricCombo = new JComboBox<>(NotificationMetric.values());
+		metricCombo.setFont(f);
+		JComboBox<TimeWindow> timeCombo = new JComboBox<>(OVERVIEW_WINDOWS);
+		timeCombo.setFont(f);
+		JComboBox<NotificationOperation> opCombo = new JComboBox<>(NotificationOperation.values());
+		opCombo.setFont(f);
+
+		notificationsTable.getColumnModel().getColumn(0).setCellEditor(new DefaultCellEditor(metricCombo));
+		notificationsTable.getColumnModel().getColumn(1).setCellEditor(new DefaultCellEditor(timeCombo));
+		notificationsTable.getColumnModel().getColumn(2).setCellEditor(new DefaultCellEditor(opCombo));
+		notificationsTable.getColumnModel().getColumn(3).setCellEditor(new NotificationValueEditor());
+
+		for (int i = 0; i < notificationsTable.getColumnCount(); i++)
+		{
+			notificationsTable.getColumnModel().getColumn(i).setCellRenderer(renderer);
+		}
+		TableCellRenderer hr = notificationsTable.getTableHeader().getDefaultRenderer();
+		if (hr instanceof DefaultTableCellRenderer)
+		{
+			((DefaultTableCellRenderer) hr).setHorizontalAlignment(SwingConstants.CENTER);
+		}
 	}
 
 	private JPanel buildMarketInfoBlock()
@@ -2726,11 +3242,49 @@ public class ItemTrackerPanel extends PluginPanel
 					+ "<br>= " + signedGp(estProfit) + "</html>");
 		}
 
+		// --- Notifications ---
+		// Whenever the table is empty, seed it with blank default rows, mirroring
+		// the collection log's ready-to-fill layout. This covers both a fresh item
+		// and one whose rules were all removed, so there are always blank lines to
+		// fill in rather than a collapsed, header-only section.
+		if (item.getNotifications().isEmpty())
+		{
+			for (int i = 0; i < DEFAULT_NOTIFICATION_ROWS; i++)
+			{
+				item.getNotifications().add(new NotificationRule());
+			}
+			item.setNotificationsInitialized(true);
+			notifyNotificationsEdited();
+		}
+		// setItem fires a structure change that drops the custom editors/renderers,
+		// so they are re-applied immediately afterwards. Skip this while the user is
+		// actively editing a cell: a periodic price refresh would otherwise yank the
+		// open editor out from under them and leave the table's editing state stuck,
+		// freezing the grid until the next refresh clears it.
+		if (!notificationsTable.isEditing())
+		{
+			notificationsModel.setItem(item);
+			applyNotificationRenderers();
+			notificationsTable.revalidate();
+		}
+
 		// --- Collection Log ---
-		acquisitionsModel.setItem(item);
-		applyTableRenderers();
-		acquisitionsTable.revalidate();
+		if (!acquisitionsTable.isEditing())
+		{
+			acquisitionsModel.setItem(item);
+			applyTableRenderers();
+			acquisitionsTable.revalidate();
+		}
 		acquisitionsSection.setVisible(item.getMode() != TrackItemMode.VIEW);
+		updateAcqPopoutButton();
+
+		// Mirror the data into the popped-out collection log, if open.
+		if (acqPopoutModel != null)
+		{
+			acqPopoutModel.setItem(item);
+			applyAcqRenderers(acqPopoutTable, acqPopoutModel, true);
+			acqPopoutTable.revalidate();
+		}
 
 		// Keep any detached section windows in sync with the item on screen.
 		refreshPopouts(item);
@@ -2931,44 +3485,27 @@ public class ItemTrackerPanel extends PluginPanel
 
 	private void applyVolatility(TrackedItem item)
 	{
-		List<WikiRealtimePriceClient.PricePoint> series = item.getSeriesFor(TimeWindow.WEEK);
-		long cutoff = System.currentTimeMillis() / 1000L - TimeWindow.WEEK.getDuration().getSeconds();
-		List<Long> samples = new ArrayList<>();
-		for (WikiRealtimePriceClient.PricePoint p : series)
-		{
-			if (p.getTimestamp() < cutoff) continue;
-			if (p.getAvgHighPrice() > 0) samples.add(p.getAvgHighPrice());
-			if (p.getAvgLowPrice() > 0) samples.add(p.getAvgLowPrice());
-		}
-		if (samples.size() < 2)
+		String label = MarketClassifier.volatility(item.getSeriesFor(TimeWindow.WEEK));
+		if (label == null)
 		{
 			miVolatility.setText("—");
 			miVolatility.setForeground(Color.WHITE);
 			miVolatility.setToolTipText(null);
 			return;
 		}
-		double mean = 0;
-		for (long v : samples) mean += v;
-		mean /= samples.size();
-		double variance = 0;
-		for (long v : samples) variance += (v - mean) * (v - mean);
-		variance /= samples.size();
-		double pct = mean > 0 ? Math.sqrt(variance) / mean * 100.0 : 0;
-
-		String label;
 		Color color;
 		String tooltip;
-		if (pct < 1.5)
+		switch (label)
 		{
-			label = "Low"; color = COLOR_HIGH; tooltip = "Stable Price";
-		}
-		else if (pct <= 5.0)
-		{
-			label = "Medium"; color = COLOR_AVG; tooltip = "Occasional/Moderate Price Swings";
-		}
-		else
-		{
-			label = "High"; color = COLOR_LOW; tooltip = "Large/Frequent Price Swings";
+			case "Low":
+				color = COLOR_HIGH; tooltip = "Stable Price";
+				break;
+			case "Medium":
+				color = COLOR_AVG; tooltip = "Occasional/Moderate Price Swings";
+				break;
+			default:
+				color = COLOR_LOW; tooltip = "Large/Frequent Price Swings";
+				break;
 		}
 		miVolatility.setText(label);
 		miVolatility.setForeground(color);
@@ -2977,27 +3514,15 @@ public class ItemTrackerPanel extends PluginPanel
 
 	private void applyLiquidity(long vol24)
 	{
-		String label;
-		Color color;
-		if (vol24 <= 0)
+		String label = MarketClassifier.liquidity(vol24);
+		if (label == null)
 		{
 			miLiquidity.setText("—");
 			miLiquidity.setForeground(Color.WHITE);
 			miLiquidity.setToolTipText(null);
 			return;
 		}
-		if (vol24 < 500)
-		{
-			label = "Low"; color = COLOR_LOW;
-		}
-		else if (vol24 <= 5000)
-		{
-			label = "Medium"; color = COLOR_AVG;
-		}
-		else
-		{
-			label = "High"; color = COLOR_HIGH;
-		}
+		Color color = "Low".equals(label) ? COLOR_LOW : "Medium".equals(label) ? COLOR_AVG : COLOR_HIGH;
 		miLiquidity.setText(label);
 		miLiquidity.setForeground(color);
 		miLiquidity.setToolTipText("24h volume: " + NUMBER_FORMAT.format(vol24));
@@ -3005,43 +3530,31 @@ public class ItemTrackerPanel extends PluginPanel
 
 	/**
 	 * Classifies where the current average sits within the 30-day range and
-	 * shows it as High / High Avg / Average / Low Avg / Low.
+	 * shows it as Highest / High / High Avg / Average / Low Avg / Low / Lowest.
 	 */
 	private void applyRangePosition(long min, long max, long live)
 	{
-		if (max <= min || live <= 0)
+		String text = MarketClassifier.rangePosition(min, max, live);
+		if (text == null)
 		{
 			rangePositionLabel.setText("-");
 			rangePositionLabel.setForeground(COLOR_VOLUME);
 			return;
 		}
-		double frac = Math.max(0, Math.min(1, (double) (live - min) / (max - min)));
-		String text;
 		Color color;
-		if (frac >= 0.75)
+		switch (text)
 		{
-			text = "High";
-			color = COLOR_HIGH;
-		}
-		else if (frac >= 0.60)
-		{
-			text = "High Avg";
-			color = COLOR_AVG;
-		}
-		else if (frac >= 0.40)
-		{
-			text = "Average";
-			color = COLOR_AVG;
-		}
-		else if (frac >= 0.25)
-		{
-			text = "Low Avg";
-			color = COLOR_AVG;
-		}
-		else
-		{
-			text = "Low";
-			color = COLOR_LOW;
+			case "Highest":
+			case "High":
+				color = COLOR_HIGH;
+				break;
+			case "Low":
+			case "Lowest":
+				color = COLOR_LOW;
+				break;
+			default:
+				color = COLOR_AVG;
+				break;
 		}
 		rangePositionLabel.setText(text);
 		rangePositionLabel.setForeground(color);
@@ -3049,37 +3562,50 @@ public class ItemTrackerPanel extends PluginPanel
 
 	private long[] thirtyDayRange(TrackedItem item)
 	{
-		List<WikiRealtimePriceClient.PricePoint> series = item.getSeriesFor(TimeWindow.MONTH);
-		long cutoff = System.currentTimeMillis() / 1000L - TimeWindow.MONTH.getDuration().getSeconds();
-		long min = Long.MAX_VALUE;
-		long max = Long.MIN_VALUE;
-		for (WikiRealtimePriceClient.PricePoint p : series)
-		{
-			if (p.getTimestamp() < cutoff) continue;
-			if (p.getAvgLowPrice() > 0) min = Math.min(min, p.getAvgLowPrice());
-			if (p.getAvgHighPrice() > 0) max = Math.max(max, p.getAvgHighPrice());
-		}
-		if (min == Long.MAX_VALUE || max == Long.MIN_VALUE)
-		{
-			return new long[]{0, 0};
-		}
-		return new long[]{min, max};
+		return MarketClassifier.thirtyDayRange(item.getSeriesFor(TimeWindow.MONTH));
 	}
 
 	private void applyTableRenderers()
 	{
+		applyAcqRenderers(acquisitionsTable, acquisitionsModel, false);
+	}
+
+	private static final String[] ACQ_FULL_HEADERS = {"Quantity", "Bought Price", "Sold Price", "Profit"};
+
+	/**
+	 * Applies fonts, row height, renderers, editors and header titles to a
+	 * collection-log table. The {@code expanded} pop-out uses a larger monospaced
+	 * font, full-format numbers and spelled-out headers.
+	 */
+	private void applyAcqRenderers(JTable table, AcquisitionsTableModel model, boolean expanded)
+	{
+		Font f = expanded ? new Font(Font.MONOSPACED, Font.PLAIN, 18) : FontManager.getRunescapeSmallFont();
+		table.setFont(f);
+		table.setRowHeight(expanded ? 30 : 22);
+		table.getTableHeader().setFont(f);
+
 		JTextField centerEditorField = new JTextField();
 		centerEditorField.setHorizontalAlignment(SwingConstants.CENTER);
+		centerEditorField.setFont(f);
 		DefaultCellEditor centerEditor = new DefaultCellEditor(centerEditorField);
-		int cols = acquisitionsTable.getColumnCount();
+
+		int cols = table.getColumnCount();
 		for (int i = 0; i < cols; i++)
 		{
-			acquisitionsTable.getColumnModel().getColumn(i).setCellRenderer(new AcqCellRenderer(i == 3));
+			TableColumn col = table.getColumnModel().getColumn(i);
+			col.setCellRenderer(new AcqCellRenderer(i == 3, expanded));
 			if (i != 3)
 			{
-				acquisitionsTable.getColumnModel().getColumn(i).setCellEditor(centerEditor);
+				col.setCellEditor(centerEditor);
 			}
+			col.setHeaderValue(expanded ? ACQ_FULL_HEADERS[i] : model.getColumnName(i));
 		}
+		TableCellRenderer hr = table.getTableHeader().getDefaultRenderer();
+		if (hr instanceof DefaultTableCellRenderer)
+		{
+			((DefaultTableCellRenderer) hr).setHorizontalAlignment(SwingConstants.CENTER);
+		}
+		table.getTableHeader().repaint();
 	}
 
 	private static String acqTooltipLabel(int col)
@@ -3183,6 +3709,235 @@ public class ItemTrackerPanel extends PluginPanel
 	}
 
 	/**
+	 * Backs the Notifications table. Each row is a {@link NotificationRule};
+	 * editing a cell mutates the rule in place and enforces the per-metric locks
+	 * (categorical metrics force the {@code =} operator; the 30-day range forces a
+	 * one-month window; quantity has no window).
+	 */
+	private class NotificationsTableModel extends AbstractTableModel
+	{
+		private final String[] COLS = {"Metric", "Time", "Op", "Value"};
+		private TrackedItem item;
+
+		void setItem(TrackedItem item)
+		{
+			this.item = item;
+			fireTableStructureChanged();
+		}
+
+		@Override public int getRowCount() { return item == null ? 0 : item.getNotifications().size(); }
+		@Override public int getColumnCount() { return COLS.length; }
+		@Override public String getColumnName(int c) { return COLS[c]; }
+
+		@Override
+		public boolean isCellEditable(int r, int c)
+		{
+			if (item == null || r < 0 || r >= item.getNotifications().size())
+			{
+				return false;
+			}
+			NotificationMetric m = item.getNotifications().get(r).getMetric();
+			switch (c)
+			{
+				case 1: return m == null || (!m.isTimeframeDisabled() && !m.locksTimeframeToMonth());
+				case 2: return m == null || !m.locksOperationToEquals();
+				default: return true;
+			}
+		}
+
+		@Override
+		public Object getValueAt(int r, int c)
+		{
+			NotificationRule rule = item.getNotifications().get(r);
+			NotificationMetric m = rule.getMetric();
+			switch (c)
+			{
+				case 0: return m;
+				case 1: return m != null && m.isTimeframeDisabled() ? "—" : rule.getTimeWindow();
+				case 2: return rule.getOperation();
+				case 3: return rule.getValue();
+				default: return "";
+			}
+		}
+
+		@Override
+		public void setValueAt(Object value, int r, int c)
+		{
+			if (item == null || r < 0 || r >= item.getNotifications().size())
+			{
+				return;
+			}
+			NotificationRule rule = item.getNotifications().get(r);
+			switch (c)
+			{
+				case 0:
+					if (!(value instanceof NotificationMetric) || value == rule.getMetric())
+					{
+						return;
+					}
+					NotificationMetric m = (NotificationMetric) value;
+					rule.setMetric(m);
+					// Populate the rest of the row with sensible, valid defaults so a
+					// freshly-chosen metric yields a complete rule.
+					if (m.locksTimeframeToMonth())
+					{
+						rule.setTimeWindow(TimeWindow.MONTH);
+					}
+					else if (m.isTimeframeDisabled())
+					{
+						rule.setTimeWindow(null);
+					}
+					else if (rule.getTimeWindow() == null)
+					{
+						rule.setTimeWindow(TimeWindow.LIVE);
+					}
+					if (m.locksOperationToEquals())
+					{
+						rule.setOperation(NotificationOperation.EQ);
+					}
+					else if (rule.getOperation() == null)
+					{
+						rule.setOperation(NotificationOperation.GTE);
+					}
+					rule.setValue(m.isCategorical() ? m.getOptions().get(0) : "");
+					resetTrigger(rule);
+					fireTableRowsUpdated(r, r);
+					break;
+				case 1:
+					if (!(value instanceof TimeWindow))
+					{
+						return;
+					}
+					rule.setTimeWindow((TimeWindow) value);
+					resetTrigger(rule);
+					break;
+				case 2:
+					if (!(value instanceof NotificationOperation))
+					{
+						return;
+					}
+					rule.setOperation((NotificationOperation) value);
+					resetTrigger(rule);
+					break;
+				case 3:
+					applyValueEdit(rule, value == null ? "" : value.toString());
+					resetTrigger(rule);
+					fireTableRowsUpdated(r, r);
+					break;
+				default:
+					return;
+			}
+			notifyNotificationsEdited();
+		}
+
+		private void applyValueEdit(NotificationRule rule, String raw)
+		{
+			NotificationMetric m = rule.getMetric();
+			if (m.isCategorical())
+			{
+				rule.setValue(raw.trim());
+				return;
+			}
+			if (m.getKind() == NotificationMetric.Kind.PERCENT)
+			{
+				java.util.OptionalDouble v = NotificationRule.parsePercent(raw);
+				if (v.isPresent())
+				{
+					rule.setValue(NotificationRule.formatPercent(v.getAsDouble()));
+				}
+				return;
+			}
+			java.util.OptionalDouble v = NotificationRule.parseNumeric(raw);
+			if (v.isPresent())
+			{
+				rule.setValue(NotificationRule.formatNumericShort(v.getAsDouble()));
+			}
+		}
+
+		private void resetTrigger(NotificationRule rule)
+		{
+			rule.setArmed(false);
+			rule.setLastFired(null);
+		}
+	}
+
+	/** Value-column editor: a dropdown for categorical metrics, a text field otherwise. */
+	private class NotificationValueEditor extends AbstractCellEditor implements TableCellEditor
+	{
+		private final JComboBox<String> combo = new JComboBox<>();
+		private final JTextField field = new JTextField();
+		private JComponent active;
+
+		NotificationValueEditor()
+		{
+			combo.setFont(FontManager.getRunescapeSmallFont());
+			field.setFont(FontManager.getRunescapeSmallFont());
+			field.setHorizontalAlignment(SwingConstants.CENTER);
+		}
+
+		@Override
+		public Component getTableCellEditorComponent(JTable table, Object value, boolean isSelected, int row, int column)
+		{
+			NotificationMetric metric = null;
+			TrackedItem t = currentItems.get(detailItemId);
+			if (t != null && row >= 0 && row < t.getNotifications().size())
+			{
+				metric = t.getNotifications().get(row).getMetric();
+			}
+			if (metric != null && metric.isCategorical())
+			{
+				combo.removeAllItems();
+				for (String opt : metric.getOptions())
+				{
+					combo.addItem(opt);
+				}
+				combo.setSelectedItem(value == null ? null : value.toString());
+				active = combo;
+			}
+			else
+			{
+				field.setText(value == null ? "" : value.toString());
+				active = field;
+			}
+			return active;
+		}
+
+		@Override
+		public Object getCellEditorValue()
+		{
+			if (active == combo)
+			{
+				Object sel = combo.getSelectedItem();
+				return sel == null ? "" : sel.toString();
+			}
+			return field.getText();
+		}
+	}
+
+	/** Centered renderer for the Notifications table; shows enum/string labels. */
+	private static class NotifCellRenderer extends DefaultTableCellRenderer
+	{
+		NotifCellRenderer()
+		{
+			setHorizontalAlignment(SwingConstants.CENTER);
+		}
+
+		@Override
+		public Component getTableCellRendererComponent(JTable table, Object value,
+				boolean isSelected, boolean hasFocus, int row, int column)
+		{
+			super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column);
+			setText(value == null ? "" : value.toString());
+			if (!isSelected)
+			{
+				setBackground(table.getBackground());
+				setForeground(Color.WHITE);
+			}
+			return this;
+		}
+	}
+
+	/**
 	 * Renders collection-log numbers: full format at ≤4 digits, short format
 	 * when they would overflow. Short-form cells highlight (column-tinted) and
 	 * carry a full-value tooltip on hover, mirroring the rest of the plugin.
@@ -3190,10 +3945,12 @@ public class ItemTrackerPanel extends PluginPanel
 	private class AcqCellRenderer extends DefaultTableCellRenderer
 	{
 		private final boolean profit;
+		private final boolean expanded;
 
-		AcqCellRenderer(boolean profit)
+		AcqCellRenderer(boolean profit, boolean expanded)
 		{
 			this.profit = profit;
+			this.expanded = expanded;
 			setHorizontalAlignment(SwingConstants.CENTER);
 		}
 
@@ -3216,7 +3973,8 @@ public class ItemTrackerPanel extends PluginPanel
 			long v = ((Number) value).longValue();
 			// Profit overflows sooner (it carries a sign), so it goes short at 4+ digits
 			// and is capped to 3 significant figures (e.g. 234K / 23.4K, never 234.5K).
-			boolean shortForm = Math.abs(v) >= (profit ? 1000 : 10000);
+			// The expanded pop-out always shows full comma-grouped numbers.
+			boolean shortForm = !expanded && Math.abs(v) >= (profit ? 1000 : 10000);
 			String text = shortForm
 					? (profit ? formatShort3Sig(v) : formatItemShort(v))
 					: NUMBER_FORMAT.format(v);

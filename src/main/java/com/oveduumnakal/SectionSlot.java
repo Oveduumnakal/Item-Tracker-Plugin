@@ -19,7 +19,8 @@ public enum SectionSlot
 	FIFTH("5th"),
 	SIXTH("6th"),
 	SEVENTH("7th"),
-	EIGHTH("8th");
+	EIGHTH("8th"),
+	NINTH("9th");
 
 	private final String label;
 

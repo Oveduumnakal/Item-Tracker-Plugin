@@ -27,6 +27,7 @@ import java.awt.image.BufferedImage;
 import java.text.NumberFormat;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Calendar;
 import java.util.Collections;
 import java.util.Date;
@@ -36,6 +37,21 @@ import java.util.Locale;
 public class PriceGraphPanel extends JPanel
 {
 	public enum Mode { PRICE, VOLUME }
+
+	/** Which of the High/Low/Avg price lines are drawn. */
+	public enum LineSet
+	{
+		ALL("All"),
+		HIGH_LOW("H/L"),
+		AVG("Avg");
+
+		final String label;
+
+		LineSet(String label)
+		{
+			this.label = label;
+		}
+	}
 
 	private static final NumberFormat NUMBER_FORMAT = NumberFormat.getNumberInstance(Locale.US);
 
@@ -78,6 +94,19 @@ public class PriceGraphPanel extends JPanel
 	private final List<JLabel> tabLabels = new ArrayList<>();
 	private int hoverX = -1;
 
+	// Price mode: when on, the high/low/avg lines are drawn as smooth curves
+	// instead of straight segments. Toggled by the "Smooth" label in the tab bar.
+	private boolean smooth = false;
+	private JLabel smoothToggle;
+	// Notified when the user clicks the toggle, so the shared preference and the
+	// sibling (sidebar/pop-out) graph can stay in sync.
+	private java.util.function.Consumer<Boolean> smoothListener;
+
+	// Which High/Low/Avg lines are drawn, cycled by the "lines" toggle (price mode).
+	private LineSet lineSet = LineSet.ALL;
+	private JLabel linesToggle;
+	private java.util.function.Consumer<LineSet> lineSetListener;
+
 	// The data plot is expensive to render (paths, EMA, spline), so it is cached
 	// to an image and only rebuilt when the data, timeframe, or size changes.
 	// Mouse-move hovering then only blits the cache and redraws the crosshair.
@@ -111,10 +140,11 @@ public class PriceGraphPanel extends JPanel
 		setBackground(BG_COLOR);
 		setPreferredSize(mode == Mode.PRICE ? new Dimension(240, 250) : new Dimension(240, 182));
 
-		tabsBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+		// Tighter gaps in the narrow sidebar so the tabs and both toggles all fit.
+		tabsBar = new JPanel(new FlowLayout(FlowLayout.LEFT, expanded ? 8 : 2, 0));
 		tabsBar.setBackground(BG_COLOR);
 		// 5px above the timeframe buttons, a little breathing room below.
-		tabsBar.setBorder(new EmptyBorder(5, 4, 4, 4));
+		tabsBar.setBorder(new EmptyBorder(5, 4, 4, expanded ? 4 : 0));
 		String[] tabTexts = expanded ? TIMEFRAME_LABELS_FULL : TIMEFRAME_LABELS;
 		for (int i = 0; i < TIMEFRAMES.length; i++)
 		{
@@ -138,7 +168,61 @@ public class PriceGraphPanel extends JPanel
 			tabLabels.add(tab);
 			tabsBar.add(tab);
 		}
-		add(tabsBar, java.awt.BorderLayout.NORTH);
+
+		// Tabs on the left; the price-mode "lines" and "Smooth" toggles on the right.
+		JPanel topRow = new JPanel(new java.awt.BorderLayout());
+		topRow.setBackground(BG_COLOR);
+		topRow.add(tabsBar, java.awt.BorderLayout.WEST);
+		if (mode == Mode.PRICE)
+		{
+			int togglePad = expanded ? 4 : 2;
+			linesToggle = new JLabel(lineSet.label);
+			linesToggle.setForeground(Color.WHITE);
+			linesToggle.setFont(baseFont);
+			linesToggle.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+			linesToggle.setBorder(new EmptyBorder(2, togglePad, 2, togglePad));
+			linesToggle.setToolTipText("Cycle visible lines: All / High & Low / Avg");
+			linesToggle.addMouseListener(new MouseAdapter()
+			{
+				@Override
+				public void mouseClicked(MouseEvent e)
+				{
+					LineSet[] all = LineSet.values();
+					setLineSet(all[(lineSet.ordinal() + 1) % all.length]);
+					if (lineSetListener != null)
+					{
+						lineSetListener.accept(lineSet);
+					}
+				}
+			});
+
+			smoothToggle = new JLabel("Smooth");
+			smoothToggle.setFont(baseFont);
+			smoothToggle.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+			smoothToggle.setBorder(new EmptyBorder(2, togglePad, 2, togglePad));
+			smoothToggle.setToolTipText("Toggle line smoothing");
+			smoothToggle.addMouseListener(new MouseAdapter()
+			{
+				@Override
+				public void mouseClicked(MouseEvent e)
+				{
+					setSmooth(!smooth);
+					if (smoothListener != null)
+					{
+						smoothListener.accept(smooth);
+					}
+				}
+			});
+
+			JPanel toggles = new JPanel(new FlowLayout(FlowLayout.RIGHT, expanded ? 8 : 4, 0));
+			toggles.setBackground(BG_COLOR);
+			toggles.setBorder(new EmptyBorder(5, 0, 4, expanded ? 4 : 0));
+			toggles.add(linesToggle);
+			toggles.add(smoothToggle);
+			topRow.add(toggles, java.awt.BorderLayout.EAST);
+			updateSmoothToggle();
+		}
+		add(topRow, java.awt.BorderLayout.NORTH);
 		updateTabHighlight();
 
 		addMouseMotionListener(new MouseMotionAdapter()
@@ -181,6 +265,65 @@ public class PriceGraphPanel extends JPanel
 				l.setBorder(new EmptyBorder(2, 4, 2, 4));
 			}
 		}
+	}
+
+	private void updateSmoothToggle()
+	{
+		if (smoothToggle == null)
+		{
+			return;
+		}
+		smoothToggle.setForeground(smooth ? COLOR_AVG : Color.LIGHT_GRAY);
+		smoothToggle.setFont(smooth ? baseFont.deriveFont(Font.BOLD) : baseFont);
+	}
+
+	public boolean isSmooth()
+	{
+		return smooth;
+	}
+
+	/** Sets the smoothing state programmatically (does not fire the listener). */
+	public void setSmooth(boolean s)
+	{
+		if (smooth == s)
+		{
+			return;
+		}
+		smooth = s;
+		plotCacheDirty = true;
+		updateSmoothToggle();
+		repaint();
+	}
+
+	public void setSmoothListener(java.util.function.Consumer<Boolean> listener)
+	{
+		this.smoothListener = listener;
+	}
+
+	public LineSet getLineSet()
+	{
+		return lineSet;
+	}
+
+	/** Sets the visible-line set programmatically (does not fire the listener). */
+	public void setLineSet(LineSet set)
+	{
+		if (set == null || lineSet == set)
+		{
+			return;
+		}
+		lineSet = set;
+		if (linesToggle != null)
+		{
+			linesToggle.setText(lineSet.label);
+		}
+		plotCacheDirty = true;
+		repaint();
+	}
+
+	public void setLineSetListener(java.util.function.Consumer<LineSet> listener)
+	{
+		this.lineSetListener = listener;
 	}
 
 	public void setData(
@@ -409,39 +552,47 @@ public class PriceGraphPanel extends JPanel
 			g2.drawString(abbreviate(val), plotRight + 4, y + fm.getAscent() / 2);
 		}
 
-		Path2D highPath = new Path2D.Double();
-		Path2D lowPath = new Path2D.Double();
-		Path2D avgPath = new Path2D.Double();
-		boolean fH = true, fL = true, fA = true;
+		int n = visible.size();
+		int[] hx = new int[n], hy = new int[n];
+		int[] lx = new int[n], ly = new int[n];
+		int[] ax = new int[n], ay = new int[n];
+		int hc = 0, lc = 0, ac = 0;
 		for (WikiRealtimePriceClient.PricePoint p : visible)
 		{
 			int x = plotLeft + (int) ((double) (p.getTimestamp() - startSec) / span * plotW);
 			if (p.getAvgHighPrice() > 0)
 			{
-				int y = plotBottom - (int) ((p.getAvgHighPrice() - axisMin) / axisRange * plotH);
-				if (fH) { highPath.moveTo(x, y); fH = false; } else highPath.lineTo(x, y);
+				hx[hc] = x; hy[hc] = plotBottom - (int) ((p.getAvgHighPrice() - axisMin) / axisRange * plotH); hc++;
 			}
 			if (p.getAvgLowPrice() > 0)
 			{
-				int y = plotBottom - (int) ((p.getAvgLowPrice() - axisMin) / axisRange * plotH);
-				if (fL) { lowPath.moveTo(x, y); fL = false; } else lowPath.lineTo(x, y);
+				lx[lc] = x; ly[lc] = plotBottom - (int) ((p.getAvgLowPrice() - axisMin) / axisRange * plotH); lc++;
 			}
 			long avg = midpoint(p);
 			if (avg > 0)
 			{
-				int y = plotBottom - (int) ((avg - axisMin) / axisRange * plotH);
-				if (fA) { avgPath.moveTo(x, y); fA = false; } else avgPath.lineTo(x, y);
+				ax[ac] = x; ay[ac] = plotBottom - (int) ((avg - axisMin) / axisRange * plotH); ac++;
 			}
 		}
 
 		// Trend lines drawn at 75% opacity to soften the noisy crisscrossing.
+		// Smoothing replaces the straight segments with an overshoot-free spline.
+		// Which lines are shown depends on the current LineSet.
+		boolean showHighLow = lineSet != LineSet.AVG;
+		boolean showAvg = lineSet != LineSet.HIGH_LOW;
 		g2.setStroke(new BasicStroke(0.8f));
-		g2.setColor(withAlpha(COLOR_HIGH, 191));
-		g2.draw(highPath);
-		g2.setColor(withAlpha(COLOR_LOW, 191));
-		g2.draw(lowPath);
-		g2.setColor(withAlpha(COLOR_AVG, 191));
-		g2.draw(avgPath);
+		if (showHighLow)
+		{
+			g2.setColor(withAlpha(COLOR_HIGH, 191));
+			g2.draw(buildSeriesPath(hx, hy, hc));
+			g2.setColor(withAlpha(COLOR_LOW, 191));
+			g2.draw(buildSeriesPath(lx, ly, lc));
+		}
+		if (showAvg)
+		{
+			g2.setColor(withAlpha(COLOR_AVG, 191));
+			g2.draw(buildSeriesPath(ax, ay, ac));
+		}
 
 		// Current average price: dashed blue-grey line drawn on top.
 		if (currentPrice > 0)
@@ -719,6 +870,55 @@ public class PriceGraphPanel extends JPanel
 		{
 			e = alpha * values[i] + (1 - alpha) * e;
 			out[i] = e;
+		}
+		return out;
+	}
+
+	/**
+	 * Builds the path for one price line from the first {@code n} points: a
+	 * straight polyline normally, or an overshoot-free spline when smoothing is on.
+	 */
+	private Path2D buildSeriesPath(int[] xs, int[] ys, int n)
+	{
+		if (n <= 0)
+		{
+			return new Path2D.Double();
+		}
+		if (smooth && n >= 2)
+		{
+			// Light centred moving average to shave off jitter, then the spline.
+			double[] sy = movingAverage(ys, n, 3);
+			int[] syi = new int[n];
+			for (int i = 0; i < n; i++)
+			{
+				syi[i] = (int) Math.round(sy[i]);
+			}
+			return monotoneCubic(Arrays.copyOf(xs, n), syi);
+		}
+		Path2D path = new Path2D.Double();
+		path.moveTo(xs[0], ys[0]);
+		for (int i = 1; i < n; i++)
+		{
+			path.lineTo(xs[i], ys[i]);
+		}
+		return path;
+	}
+
+	/** Centred (lag-free) moving average over a window of {@code window} samples. */
+	private static double[] movingAverage(int[] ys, int n, int window)
+	{
+		double[] out = new double[n];
+		int half = window / 2;
+		for (int i = 0; i < n; i++)
+		{
+			int lo = Math.max(0, i - half);
+			int hi = Math.min(n - 1, i + half);
+			double sum = 0;
+			for (int j = lo; j <= hi; j++)
+			{
+				sum += ys[j];
+			}
+			out[i] = sum / (hi - lo + 1);
 		}
 		return out;
 	}
