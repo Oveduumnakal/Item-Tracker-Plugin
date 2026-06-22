@@ -1045,7 +1045,7 @@ public class ItemTrackerPanel extends PluginPanel
 		nameLabel.setForeground(Color.WHITE);
 		nameLabel.setFont(FontManager.getRunescapeBoldFont());
 
-		JLabel qtyLabel = new JLabel("Qty: " + abbreviateQty(item.getQuantity()));
+		JLabel qtyLabel = new JLabel("Qty: " + GpFormat.shortValue(item.getQuantity()));
 		qtyLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 		qtyLabel.setFont(FontManager.getRunescapeSmallFont());
 		qtyLabel.setToolTipText(NUMBER_FORMAT.format(item.getQuantity()));
@@ -1173,7 +1173,7 @@ public class ItemTrackerPanel extends PluginPanel
 					JLabel cell = new JLabel("", SwingConstants.CENTER);
 					cell.setForeground(COLOR_VOLUME);
 					cell.setFont(FontManager.getRunescapeSmallFont());
-					String volText = window == TimeWindow.LIVE ? "-" : formatItemShort(vol);
+					String volText = window == TimeWindow.LIVE ? "-" : GpFormat.shortValue(vol);
 					cell.setText(volText);
 					if (window != TimeWindow.LIVE)
 						cell.setToolTipText("Volume: " + NUMBER_FORMAT.format(vol));
@@ -1224,7 +1224,7 @@ public class ItemTrackerPanel extends PluginPanel
 			if (config.showItemProfitRow()
 					&& item.isCostBasisInitialized() && item.hasPrices())
 			{
-				long itemProfit = item.getAvgValue() - item.getCostBasis();
+				long itemProfit = (long) item.getRecordQuantitySum() * item.getAvgPrice() - item.getCostBasis();
 				String sign = itemProfit > 0 ? "+" : "";
 				ValueFormat fmt = config.geEstimatesFormat();
 
@@ -1307,34 +1307,6 @@ public class ItemTrackerPanel extends PluginPanel
 		}
 	}
 
-	private static String abbreviateQty(int qty)
-	{
-		if (qty < 1000)
-			return Integer.toString(qty);
-
-		double scaled;
-		String suffix;
-		if (qty >= 1_000_000_000)
-		{
-			scaled = qty / 1_000_000_000.0;
-			suffix = "b";
-		}
-		else if (qty >= 1_000_000)
-		{
-			scaled = qty / 1_000_000.0;
-			suffix = "m";
-		}
-		else
-		{
-			scaled = qty / 1_000.0;
-			suffix = "k";
-		}
-
-		String s = String.format("%.1f", scaled);
-		s = s.replaceAll("\\.0$", "");
-		return s + suffix;
-	}
-
 	private void installItemValue(JLabel label, long value, String prefix, Color tint)
 	{
 		installItemValue(label, value, prefix, null, tint);
@@ -1342,16 +1314,16 @@ public class ItemTrackerPanel extends PluginPanel
 
 	private void installItemValue(JLabel label, long value, String prefix, String tooltipLabel, Color tint)
 	{
-		String shortText = prefix + formatItemShort(value);
+		installShortValue(label, value, prefix + GpFormat.shortValue(value), tooltipLabel, tint);
+	}
+
+	/** Installs a pre-formatted compact value with full-number tooltip and hover tint. */
+	private void installShortValue(JLabel label, long value, String shortText, String tooltipLabel, Color tint)
+	{
 		label.setText(shortText);
 		String tooltipPrefix = tooltipLabel == null ? "" : tooltipLabel + ": ";
 		label.setToolTipText(tooltipPrefix + NUMBER_FORMAT.format(value) + " gp");
-		for (MouseListener ml : label.getMouseListeners())
-		{
-			if (ml instanceof HoverTintListener)
-				label.removeMouseListener(ml);
-		}
-
+		removeHoverTint(label);
 		HoverTintListener listener = new HoverTintListener(label, shortText, tint);
 		label.addMouseListener(listener);
 		SwingUtilities.invokeLater(listener::applyIfHovered);
@@ -1435,74 +1407,9 @@ public class ItemTrackerPanel extends PluginPanel
 			label.setToolTipText(null);
 	}
 
-	private static String formatItemShort(long value)
-	{
-		long abs = Math.abs(value);
-		String sign = value < 0 ? "-" : "";
-		if (abs >= 1_000_000_000)
-			return sign + String.format("%.2fB", abs / 1_000_000_000.0);
-		else if (abs >= 1_000_000)
-			return sign + String.format("%.2fM", abs / 1_000_000.0);
-		else if (abs >= 1_000)
-			return sign + String.format("%.1fK", abs / 1_000.0);
-
-		return sign + NUMBER_FORMAT.format(abs);
-	}
-
-	/**
-	 * Short format capped to 3 significant figures: 234K, 23.4K, 2.34K, 1.2M …
-	 * (never a 4-digit mantissa like 234.5K). Trailing zeros are dropped.
-	 */
-	private static String formatShort3Sig(long value)
-	{
-		long abs = Math.abs(value);
-		String sign = value < 0 ? "-" : "";
-		if (abs >= 1_000_000_000L)
-			return sign + sig3(abs / 1_000_000_000.0) + "B";
-		else if (abs >= 1_000_000L)
-			return sign + sig3(abs / 1_000_000.0) + "M";
-		else if (abs >= 1_000L)
-			return sign + sig3(abs / 1_000.0) + "K";
-
-		return sign + NUMBER_FORMAT.format(abs);
-	}
-
-	/** Formats a value in [1, 1000) to 3 significant figures, dropping trailing zeros. */
-	private static String sig3(double d)
-	{
-		String s;
-		if (d >= 100)
-			s = String.format(Locale.US, "%.0f", d);
-		else if (d >= 10)
-			s = String.format(Locale.US, "%.1f", d);
-		else
-			s = String.format(Locale.US, "%.2f", d);
-
-		if (s.contains("."))
-		{
-			s = s.replaceAll("0+$", "");
-			if (s.endsWith("."))
-				s = s.substring(0, s.length() - 1);
-		}
-
-		return s;
-	}
-
 	private static String formatTotalGp(long value, ValueFormat fmt)
 	{
-		if (fmt == ValueFormat.FULL)
-			return NUMBER_FORMAT.format(value) + " gp";
-
-		long abs = Math.abs(value);
-		String sign = value < 0 ? "-" : "";
-		if (abs >= 1_000_000_000)
-			return sign + String.format("%.2fB gp", abs / 1_000_000_000.0);
-		else if (abs >= 1_000_000)
-			return sign + String.format("%.2fM gp", abs / 1_000_000.0);
-		else if (abs >= 1_000)
-			return sign + String.format("%.1fK gp", abs / 1_000.0);
-
-		return sign + NUMBER_FORMAT.format(abs) + " gp";
+		return fmt == ValueFormat.FULL ? GpFormat.fullGp(value) : GpFormat.shortGp(value);
 	}
 
 	private void buildDetailCard()
@@ -2481,21 +2388,7 @@ public class ItemTrackerPanel extends PluginPanel
 	/** Spelled-out time-window label for the pop-out's leftmost column. */
 	private static String fullWindowLabel(TimeWindow w)
 	{
-		switch (w)
-		{
-			case LIVE:   return "5 Minute";
-			case H1:     return "1 Hour";
-			case H3:     return "3 Hour";
-			case H6:     return "6 Hour";
-			case H12:    return "12 Hour";
-			case H24:    return "24 Hour";
-			case WEEK:   return "1 Week";
-			case MONTH:  return "1 Month";
-			case MONTH3: return "3 Month";
-			case MONTH6: return "6 Month";
-			case YEAR:   return "1 Year";
-			default:     return w.toString();
-		}
+		return w.getLongLabel();
 	}
 
 	/**
@@ -3213,7 +3106,7 @@ public class ItemTrackerPanel extends PluginPanel
 		detailNameLabel.setText(item.getName());
 
 		int detailQty = item.getQuantity();
-		detailQtyLabel.setText("Qty: " + abbreviateQty(detailQty));
+		detailQtyLabel.setText("Qty: " + GpFormat.shortValue(detailQty));
 		detailQtyLabel.setToolTipText(NUMBER_FORMAT.format(detailQty));
 
 		final boolean hasPrices = item.hasPrices();
@@ -3372,7 +3265,7 @@ public class ItemTrackerPanel extends PluginPanel
 			label.setToolTipText((tooltipLabel == null ? "" : tooltipLabel + ": ") + NUMBER_FORMAT.format(value) + " gp");
 		}
 		else
-			installItemValue(label, value, "", tooltipLabel, tint);
+			installShortValue(label, value, GpFormat.shortValue1dp(value), tooltipLabel, tint);
 	}
 
 	/** Removes any hover-to-tint listener so a label can show plain static text. */
@@ -3412,7 +3305,7 @@ public class ItemTrackerPanel extends PluginPanel
 			return;
 		}
 
-		String text = formatItemShort(vol);
+		String text = GpFormat.shortValue1dp(vol);
 		label.setText(text);
 		removeHoverTint(label);
 		HoverTintListener listener = new HoverTintListener(label, text, TINT_VOLUME);
@@ -3473,20 +3366,7 @@ public class ItemTrackerPanel extends PluginPanel
 
 	private static String spelledInterval(TimeWindow window)
 	{
-		switch (window)
-		{
-			case H1: return "1 hour";
-			case H3: return "3 hour";
-			case H6: return "6 hour";
-			case H12: return "12 hour";
-			case H24: return "24 hour";
-			case WEEK: return "1 week";
-			case MONTH: return "1 month";
-			case MONTH3: return "3 month";
-			case MONTH6: return "6 month";
-			case YEAR: return "1 year";
-			default: return window.toString();
-		}
+		return window.getLongLabel().toLowerCase(java.util.Locale.ROOT);
 	}
 
 	private void applyProfitLabel(JLabel label, long profit, boolean known)
@@ -3889,7 +3769,7 @@ public class ItemTrackerPanel extends PluginPanel
 
 			java.util.OptionalDouble v = NotificationRule.parseNumeric(raw);
 			if (v.isPresent())
-				rule.setValue(NotificationRule.formatNumericShort(v.getAsDouble()));
+				rule.setValue(GpFormat.shortValue((long) v.getAsDouble()));
 		}
 
 	}
@@ -4011,7 +3891,7 @@ public class ItemTrackerPanel extends PluginPanel
 			// The expanded pop-out always shows full comma-grouped numbers.
 			boolean shortForm = !expanded && Math.abs(v) >= (profit ? 1000 : 10000);
 			String text = shortForm
-					? (profit ? formatShort3Sig(v) : formatItemShort(v))
+					? GpFormat.shortValue(v)
 					: NUMBER_FORMAT.format(v);
 			if (profit && v > 0)
 				text = "+" + text;

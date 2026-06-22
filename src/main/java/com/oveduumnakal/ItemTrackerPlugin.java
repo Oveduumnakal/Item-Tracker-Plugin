@@ -1242,6 +1242,11 @@ public class ItemTrackerPlugin extends Plugin
 		});
 	}
 
+	// Δ% beyond this magnitude indicates a sparse/stale window average rather than
+	// a real price move; such values are ignored so a one-and-done rule is not
+	// fired on noise from a near-zero denominator.
+	private static final double MAX_DELTA_PCT = 1000.0;
+
 	private static final long GLOW_PERIOD_SLOW_MS = 2000;
 	private static final long GLOW_PERIOD_MEDIUM_MS = 1500;
 	private static final long GLOW_PERIOD_FAST_MS = 1000;
@@ -1408,7 +1413,8 @@ public class ItemTrackerPlugin extends Plugin
 				if (current <= 0 || avg <= 0)
 					return OptionalDouble.empty();
 
-				return OptionalDouble.of(Math.round(((double) (current - avg) / avg) * 1000.0) / 10.0);
+				double pct = Math.round(((double) (current - avg) / avg) * 1000.0) / 10.0;
+				return Math.abs(pct) > MAX_DELTA_PCT ? OptionalDouble.empty() : OptionalDouble.of(pct);
 			}
 			default:
 				return OptionalDouble.empty();

@@ -100,33 +100,6 @@ public class NotificationRule
 		}
 	}
 
-	/** Formats a numeric value in short form (e.g. {@code 5000000} → {@code "5m"}). */
-	public static String formatNumericShort(double value)
-	{
-		double abs = Math.abs(value);
-		String suffix = "";
-		double scaled = value;
-		if (abs >= 1_000_000_000)
-		{
-			scaled = value / 1_000_000_000d;
-			suffix = "b";
-		}
-		else if (abs >= 1_000_000)
-		{
-			scaled = value / 1_000_000d;
-			suffix = "m";
-		}
-		else if (abs >= 1_000)
-		{
-			scaled = value / 1_000d;
-			suffix = "k";
-		}
-
-		String num = String.format(Locale.US, "%.2f", scaled);
-		num = num.replaceAll("0+$", "").replaceAll("\\.$", "");
-		return num + suffix;
-	}
-
 	/** Formats a percentage as {@code NN.N%} or {@code NN%} when whole. */
 	public static String formatPercent(double value)
 	{

@@ -115,8 +115,10 @@ public class PriceGraphPanel extends JPanel
 	private boolean plotCacheDirty = true;
 
 	private static final int TAB_BAR_HEIGHT = 28;
-	private static final int RIGHT_AXIS_WIDTH = 38;
-	private static final int BOTTOM_AXIS_HEIGHT = 40;
+	// Reserved space for the axis labels, sized to the actual label font so the
+	// larger pop-out font does not clip the y-axis suffix or the date labels.
+	private final int rightAxisWidth;
+	private final int bottomAxisHeight;
 	private static final int LEFT_PAD = 8;
 	private static final int TOP_PAD = 13;
 	// Gap below the plot before the x-axis labels start, leaving room for the
@@ -140,6 +142,13 @@ public class PriceGraphPanel extends JPanel
 		this.baseFont = expanded
 				? new Font(Font.MONOSPACED, Font.PLAIN, 13)
 				: FontManager.getRunescapeSmallFont();
+
+		// Size the axis gutters to the label font: the y-axis must fit a value like
+		// "999.9K" (drawn at plotRight + 4) and the bottom must fit a vertical date.
+		FontMetrics axisFm = getFontMetrics(baseFont);
+		this.rightAxisWidth = axisFm.stringWidth("999.9K") + 8;
+		this.bottomAxisHeight = X_AXIS_LABEL_GAP + axisFm.stringWidth("99/99") + 4;
+
 		setLayout(new java.awt.BorderLayout());
 		setBackground(BG_COLOR);
 		setPreferredSize(mode == Mode.PRICE ? new Dimension(240, 250) : new Dimension(240, 182));
@@ -368,9 +377,9 @@ public class PriceGraphPanel extends JPanel
 			return;
 
 		int plotTop = TAB_BAR_HEIGHT + TOP_PAD;
-		int plotBottom = h - BOTTOM_AXIS_HEIGHT;
+		int plotBottom = h - bottomAxisHeight;
 		int plotLeft = LEFT_PAD;
-		int plotRight = w - RIGHT_AXIS_WIDTH;
+		int plotRight = w - rightAxisWidth;
 		int plotW = Math.max(1, plotRight - plotLeft);
 		int plotH = Math.max(1, plotBottom - plotTop);
 
@@ -561,7 +570,7 @@ public class PriceGraphPanel extends JPanel
 			g2.drawLine(plotLeft, y, plotRight, y);
 			long val = (long) (axisMin + axisRange * i / ticks);
 			g2.setColor(Color.GRAY);
-			g2.drawString(abbreviate(val), plotRight + 4, y + fm.getAscent() / 2);
+			g2.drawString(GpFormat.shortValue(val), plotRight + 4, y + fm.getAscent() / 2);
 		}
 
 		int n = visible.size();
@@ -719,7 +728,7 @@ public class PriceGraphPanel extends JPanel
 			g2.setColor(GRID_COLOR);
 			g2.drawLine(plotLeft, y, plotRight, y);
 			g2.setColor(Color.GRAY);
-			g2.drawString(abbreviate(v), plotRight + 4, y + fm.getAscent() / 2);
+			g2.drawString(GpFormat.shortValue(v), plotRight + 4, y + fm.getAscent() / 2);
 		}
 
 		// Bars (faint), with an up-arrow on any bar that exceeds the capped axis.
@@ -1196,30 +1205,4 @@ public class PriceGraphPanel extends JPanel
 		return new Color(c.getRed(), c.getGreen(), c.getBlue(), alpha);
 	}
 
-	private static String abbreviate(long v)
-	{
-		if (v <= 0)
-			return "0";
-
-		if (v >= 1_000_000_000L)
-			return oneDecimal(v / 1_000_000_000.0) + "B";
-
-		if (v >= 1_000_000L)
-			return oneDecimal(v / 1_000_000.0) + "M";
-
-		if (v >= 1_000L)
-			return oneDecimal(v / 1_000.0) + "K";
-
-		return Long.toString(v);
-	}
-
-	/** Formats with at most one decimal place, dropping a trailing ".0". */
-	private static String oneDecimal(double d)
-	{
-		String s = String.format(Locale.US, "%.1f", d);
-		if (s.endsWith(".0"))
-			s = s.substring(0, s.length() - 2);
-
-		return s;
-	}
 }

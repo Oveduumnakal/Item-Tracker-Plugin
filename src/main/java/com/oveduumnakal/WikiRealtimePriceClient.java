@@ -204,7 +204,7 @@ public class WikiRealtimePriceClient
 			}
 
 			JsonObject root = gson.fromJson(response.body().charStream(), JsonObject.class);
-			JsonArray data = root.getAsJsonArray("data");
+			JsonArray data = root == null ? null : root.getAsJsonArray("data");
 			if (data == null)
 				return Collections.emptyList();
 
