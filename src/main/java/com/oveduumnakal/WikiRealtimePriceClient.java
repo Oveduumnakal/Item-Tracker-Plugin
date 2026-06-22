@@ -48,9 +48,8 @@ public class WikiRealtimePriceClient
 		public long avg()
 		{
 			if (high > 0 && low > 0)
-			{
 				return (high + low) / 2;
-			}
+
 			return Math.max(high, low);
 		}
 	}
@@ -104,9 +103,7 @@ public class WikiRealtimePriceClient
 			JsonObject root = gson.fromJson(response.body().charStream(), JsonObject.class);
 			JsonObject data = root.getAsJsonObject("data");
 			if (data == null)
-			{
 				return Collections.emptyMap();
-			}
 
 			Map<Integer, ItemPrices> result = new HashMap<>(data.size());
 			for (Map.Entry<String, JsonElement> entry : data.entrySet())
@@ -126,6 +123,7 @@ public class WikiRealtimePriceClient
 					// skip malformed entries
 				}
 			}
+
 			return result;
 		}
 		catch (IOException | JsonParseException e)
@@ -152,9 +150,7 @@ public class WikiRealtimePriceClient
 
 			JsonArray data = gson.fromJson(response.body().charStream(), JsonArray.class);
 			if (data == null)
-			{
 				return Collections.emptyMap();
-			}
 
 			Map<Integer, ItemMapping> result = new HashMap<>(data.size());
 			for (JsonElement el : data)
@@ -163,9 +159,8 @@ public class WikiRealtimePriceClient
 				{
 					JsonObject obj = el.getAsJsonObject();
 					if (!obj.has("id") || obj.get("id").isJsonNull())
-					{
 						continue;
-					}
+
 					int id = obj.get("id").getAsInt();
 					int limit = (int) readLong(obj, "limit");
 					long value = readLong(obj, "value");
@@ -178,6 +173,7 @@ public class WikiRealtimePriceClient
 					// skip malformed entries
 				}
 			}
+
 			return result;
 		}
 		catch (IOException | JsonParseException e)
@@ -210,9 +206,7 @@ public class WikiRealtimePriceClient
 			JsonObject root = gson.fromJson(response.body().charStream(), JsonObject.class);
 			JsonArray data = root.getAsJsonArray("data");
 			if (data == null)
-			{
 				return Collections.emptyList();
-			}
 
 			List<PricePoint> points = new ArrayList<>(data.size());
 			for (JsonElement el : data)
@@ -232,6 +226,7 @@ public class WikiRealtimePriceClient
 					// skip malformed entries
 				}
 			}
+
 			return points;
 		}
 		catch (IOException | JsonParseException e)
@@ -244,9 +239,8 @@ public class WikiRealtimePriceClient
 	private static long readLong(JsonObject obj, String key)
 	{
 		if (!obj.has(key) || obj.get(key).isJsonNull())
-		{
 			return 0L;
-		}
+
 		try
 		{
 			return obj.get(key).getAsLong();
@@ -260,9 +254,7 @@ public class WikiRealtimePriceClient
 	public static PriceStats computeStats(List<PricePoint> points, TimeWindow window)
 	{
 		if (points == null || points.isEmpty())
-		{
 			return new PriceStats(0, 0, 0, 0);
-		}
 
 		long nowSec = System.currentTimeMillis() / 1000L;
 		long cutoff = window.getDuration().getSeconds() > 0
@@ -278,9 +270,8 @@ public class WikiRealtimePriceClient
 		for (PricePoint p : points)
 		{
 			if (p.getTimestamp() < cutoff)
-			{
 				continue;
-			}
+
 			long hv = p.getHighPriceVolume();
 			long lv = p.getLowPriceVolume();
 			if (p.getAvgHighPrice() > 0 && hv > 0)
@@ -288,11 +279,13 @@ public class WikiRealtimePriceClient
 				highSum += p.getAvgHighPrice();
 				highCount++;
 			}
+
 			if (p.getAvgLowPrice() > 0 && lv > 0)
 			{
 				lowSum += p.getAvgLowPrice();
 				lowCount++;
 			}
+
 			weightedSum += p.getAvgHighPrice() * hv + p.getAvgLowPrice() * lv;
 			totalVol += hv + lv;
 			volume += hv + lv;
@@ -302,13 +295,9 @@ public class WikiRealtimePriceClient
 		long low = lowCount > 0 ? Math.round((double) lowSum / lowCount) : 0;
 		long avg;
 		if (totalVol > 0)
-		{
 			avg = Math.round((double) weightedSum / totalVol);
-		}
 		else
-		{
 			avg = (high + low) / 2;
-		}
 
 		return new PriceStats(high, low, avg, volume);
 	}

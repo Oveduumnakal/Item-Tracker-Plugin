@@ -39,32 +39,24 @@ public class NotificationRule
 	public static OptionalDouble parseNumeric(String text)
 	{
 		if (text == null)
-		{
 			return OptionalDouble.empty();
-		}
+
 		String s = text.trim().toLowerCase(Locale.US).replace(",", "");
 		if (s.isEmpty())
-		{
 			return OptionalDouble.empty();
-		}
+
 		double mult = 1;
 		char last = s.charAt(s.length() - 1);
 		if (last == 'k')
-		{
 			mult = 1_000d;
-		}
 		else if (last == 'm')
-		{
 			mult = 1_000_000d;
-		}
 		else if (last == 'b')
-		{
 			mult = 1_000_000_000d;
-		}
+
 		if (mult != 1)
-		{
 			s = s.substring(0, s.length() - 1);
-		}
+
 		try
 		{
 			return OptionalDouble.of(Double.parseDouble(s) * mult);
@@ -84,26 +76,22 @@ public class NotificationRule
 	public static OptionalDouble parsePercent(String text)
 	{
 		if (text == null)
-		{
 			return OptionalDouble.empty();
-		}
+
 		String s = text.trim().replace(",", "");
 		if (s.isEmpty())
-		{
 			return OptionalDouble.empty();
-		}
+
 		boolean explicit = s.endsWith("%");
 		if (explicit)
-		{
 			s = s.substring(0, s.length() - 1).trim();
-		}
+
 		try
 		{
 			double v = Double.parseDouble(s);
 			if (!explicit && Math.abs(v) < 1)
-			{
 				v *= 100;
-			}
+
 			return OptionalDouble.of(v);
 		}
 		catch (NumberFormatException e)
@@ -133,6 +121,7 @@ public class NotificationRule
 			scaled = value / 1_000d;
 			suffix = "k";
 		}
+
 		String num = String.format(Locale.US, "%.2f", scaled);
 		num = num.replaceAll("0+$", "").replaceAll("\\.$", "");
 		return num + suffix;
@@ -142,9 +131,8 @@ public class NotificationRule
 	public static String formatPercent(double value)
 	{
 		if (value == Math.rint(value))
-		{
 			return String.format(Locale.US, "%d%%", (long) value);
-		}
+
 		return String.format(Locale.US, "%.1f%%", value);
 	}
 }

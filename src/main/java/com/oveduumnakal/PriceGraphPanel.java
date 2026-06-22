@@ -33,6 +33,7 @@ import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
+import java.util.stream.Collectors;
 
 public class PriceGraphPanel extends JPanel
 {
@@ -193,9 +194,7 @@ public class PriceGraphPanel extends JPanel
 					LineSet[] all = LineSet.values();
 					setLineSet(all[(lineSet.ordinal() + 1) % all.length]);
 					if (lineSetListener != null)
-					{
 						lineSetListener.accept(lineSet);
-					}
 				}
 			});
 
@@ -211,9 +210,7 @@ public class PriceGraphPanel extends JPanel
 				{
 					setSmooth(!smooth);
 					if (smoothListener != null)
-					{
 						smoothListener.accept(smooth);
-					}
 				}
 			});
 
@@ -225,6 +222,7 @@ public class PriceGraphPanel extends JPanel
 			topRow.add(toggles, java.awt.BorderLayout.EAST);
 			updateSmoothToggle();
 		}
+
 		add(topRow, java.awt.BorderLayout.NORTH);
 		updateTabHighlight();
 
@@ -273,25 +271,18 @@ public class PriceGraphPanel extends JPanel
 	private void updateSmoothToggle()
 	{
 		if (smoothToggle == null)
-		{
 			return;
-		}
+
 		smoothToggle.setForeground(smooth ? COLOR_AVG : Color.LIGHT_GRAY);
 		smoothToggle.setFont(smooth ? baseFont.deriveFont(Font.BOLD) : baseFont);
-	}
-
-	public boolean isSmooth()
-	{
-		return smooth;
 	}
 
 	/** Sets the smoothing state programmatically (does not fire the listener). */
 	public void setSmooth(boolean s)
 	{
 		if (smooth == s)
-		{
 			return;
-		}
+
 		smooth = s;
 		plotCacheDirty = true;
 		updateSmoothToggle();
@@ -303,23 +294,16 @@ public class PriceGraphPanel extends JPanel
 		this.smoothListener = listener;
 	}
 
-	public LineSet getLineSet()
-	{
-		return lineSet;
-	}
-
 	/** Sets the visible-line set programmatically (does not fire the listener). */
 	public void setLineSet(LineSet set)
 	{
 		if (set == null || lineSet == set)
-		{
 			return;
-		}
+
 		lineSet = set;
 		if (linesToggle != null)
-		{
 			linesToggle.setText(lineSet.label);
-		}
+
 		plotCacheDirty = true;
 		repaint();
 	}
@@ -381,9 +365,7 @@ public class PriceGraphPanel extends JPanel
 		int w = getWidth();
 		int h = getHeight();
 		if (w <= 0 || h <= 0)
-		{
 			return;
-		}
 
 		int plotTop = TAB_BAR_HEIGHT + TOP_PAD;
 		int plotBottom = h - BOTTOM_AXIS_HEIGHT;
@@ -414,9 +396,11 @@ public class PriceGraphPanel extends JPanel
 			{
 				cg.dispose();
 			}
+
 			plotCache = img;
 			plotCacheDirty = false;
 		}
+
 		g.drawImage(plotCache, 0, 0, null);
 
 		// Lightweight hover overlay drawn fresh each paint.
@@ -443,10 +427,9 @@ public class PriceGraphPanel extends JPanel
 		for (WikiRealtimePriceClient.PricePoint p : seriesForActiveWindow())
 		{
 			if (p.getTimestamp() >= startSec && p.getTimestamp() <= endSec)
-			{
 				visible.add(p);
-			}
 		}
+
 		return visible;
 	}
 
@@ -469,13 +452,9 @@ public class PriceGraphPanel extends JPanel
 		}
 
 		if (mode == Mode.VOLUME)
-		{
 			paintVolume(g2, fm, visible, plotLeft, plotTop, plotRight, plotBottom, plotW, plotH, startSec, span);
-		}
 		else
-		{
 			paintPrice(g2, fm, visible, plotLeft, plotTop, plotRight, plotBottom, plotW, plotH, startSec, span);
-		}
 
 		// X axis (shared layout: vertical labels along the bottom)
 		drawXAxis(g2, fm, plotLeft, plotBottom, plotW, startSec, endSec);
@@ -488,9 +467,8 @@ public class PriceGraphPanel extends JPanel
 	{
 		int idx = closestIndex(visible, plotLeft, plotW, startSec, span);
 		if (idx < 0)
-		{
 			return;
-		}
+
 		WikiRealtimePriceClient.PricePoint closest = visible.get(idx);
 		g2.setStroke(new BasicStroke(1));
 		g2.setColor(new Color(255, 255, 255, 120));
@@ -505,6 +483,7 @@ public class PriceGraphPanel extends JPanel
 				WikiRealtimePriceClient.PricePoint p = visible.get(i);
 				vols[i] = p.getHighPriceVolume() + p.getLowPriceVolume();
 			}
+
 			double[] ma = ema(vols, Math.max(2, visible.size() / 10));
 			lines = new String[]{
 					"V: " + NUMBER_FORMAT.format(closest.getHighPriceVolume() + closest.getLowPriceVolume()),
@@ -519,6 +498,7 @@ public class PriceGraphPanel extends JPanel
 					"A: " + NUMBER_FORMAT.format(midpoint(closest)),
 			};
 		}
+
 		drawTooltip(g2, fm, lines, plotLeft, plotTop, plotRight);
 	}
 
@@ -533,20 +513,26 @@ public class PriceGraphPanel extends JPanel
 		List<Long> values = new ArrayList<>(visible.size() * 2);
 		for (WikiRealtimePriceClient.PricePoint p : visible)
 		{
-			if (p.getAvgHighPrice() > 0) { values.add(p.getAvgHighPrice()); }
-			if (p.getAvgLowPrice() > 0) { values.add(p.getAvgLowPrice()); }
+			if (p.getAvgHighPrice() > 0)
+				values.add(p.getAvgHighPrice());
+
+			if (p.getAvgLowPrice() > 0)
+				values.add(p.getAvgLowPrice());
 		}
+
 		if (values.isEmpty())
-		{
 			return;
-		}
 
 		long min, max;
 		if (expanded)
 		{
 			min = Collections.min(values);
 			max = Collections.max(values);
-			if (currentPrice > 0) { min = Math.min(min, currentPrice); max = Math.max(max, currentPrice); }
+			if (currentPrice > 0)
+			{
+				min = Math.min(min, currentPrice);
+				max = Math.max(max, currentPrice);
+			}
 		}
 		else
 		{
@@ -590,10 +576,12 @@ public class PriceGraphPanel extends JPanel
 			{
 				hx[hc] = x; hy[hc] = priceY(p.getAvgHighPrice(), axisMin, axisRange, plotTop, plotBottom, plotH); hc++;
 			}
+
 			if (p.getAvgLowPrice() > 0)
 			{
 				lx[lc] = x; ly[lc] = priceY(p.getAvgLowPrice(), axisMin, axisRange, plotTop, plotBottom, plotH); lc++;
 			}
+
 			long avg = midpoint(p);
 			if (avg > 0)
 			{
@@ -614,6 +602,7 @@ public class PriceGraphPanel extends JPanel
 			g2.setColor(withAlpha(COLOR_LOW, 191));
 			g2.draw(buildSeriesPath(lx, ly, lc));
 		}
+
 		if (showAvg)
 		{
 			g2.setColor(withAlpha(COLOR_AVG, 191));
@@ -631,10 +620,9 @@ public class PriceGraphPanel extends JPanel
 				clipMarker(g2, x, p.getAvgHighPrice(), axisMin, axisMax, plotTop, plotBottom, COLOR_HIGH);
 				clipMarker(g2, x, p.getAvgLowPrice(), axisMin, axisMax, plotTop, plotBottom, COLOR_LOW);
 			}
+
 			if (showAvg)
-			{
 				clipMarker(g2, x, midpoint(p), axisMin, axisMax, plotTop, plotBottom, COLOR_AVG);
-			}
 		}
 
 		// Current average price: dashed blue-grey line drawn on top.
@@ -656,8 +644,12 @@ public class PriceGraphPanel extends JPanel
 			int plotTop, int plotBottom, int plotH)
 	{
 		int y = plotBottom - (int) ((value - axisMin) / axisRange * plotH);
-		if (y < plotTop) { return plotTop; }
-		if (y > plotBottom) { return plotBottom; }
+		if (y < plotTop)
+			return plotTop;
+
+		if (y > plotBottom)
+			return plotBottom;
+
 		return y;
 	}
 
@@ -670,9 +662,8 @@ public class PriceGraphPanel extends JPanel
 			int plotTop, int plotBottom, Color color)
 	{
 		if (value <= 0 || (value <= axisMax && value >= axisMin))
-		{
 			return;
-		}
+
 		final int gap = 4;   // space between the clipped line edge and the triangle
 		final int halfW = 3;
 		final int height = 4;
@@ -694,11 +685,10 @@ public class PriceGraphPanel extends JPanel
 			int plotLeft, int plotTop, int plotRight, int plotBottom, int plotW, int plotH,
 			long startSec, long span)
 	{
-		long maxVol = 0;
-		for (WikiRealtimePriceClient.PricePoint p : visible)
-		{
-			maxVol = Math.max(maxVol, p.getHighPriceVolume() + p.getLowPriceVolume());
-		}
+		long maxVol = visible.stream()
+				.mapToLong(p -> p.getHighPriceVolume() + p.getLowPriceVolume())
+				.max()
+				.orElse(0);
 		if (maxVol <= 0)
 		{
 			g2.setColor(Color.LIGHT_GRAY);
@@ -710,16 +700,12 @@ public class PriceGraphPanel extends JPanel
 		// Cap the Y axis at the 90th percentile so a rare spike doesn't flatten
 		// every other bar; bars above the cap are clipped and flagged with an arrow.
 		// The expanded pop-out shows the full range instead (no cap).
-		List<Long> vols = new ArrayList<>(visible.size());
-		for (WikiRealtimePriceClient.PricePoint p : visible)
-		{
-			vols.add(p.getHighPriceVolume() + p.getLowPriceVolume());
-		}
+		List<Long> vols = visible.stream()
+				.map(p -> p.getHighPriceVolume() + p.getLowPriceVolume())
+				.collect(Collectors.toList());
 		long cap = expanded ? maxVol : percentile(vols, 0.90);
 		if (cap <= 0)
-		{
 			cap = maxVol;
-		}
 
 		// Y axis hugs the data: the top is the cap plus a little headroom, with
 		// round-number gridlines beneath. (In the capped sidebar view, taller
@@ -762,9 +748,8 @@ public class PriceGraphPanel extends JPanel
 		int maWindow = Math.max(2, visible.size() / 10);
 		double[] volArr = new double[vols.size()];
 		for (int i = 0; i < vols.size(); i++)
-		{
 			volArr[i] = vols.get(i);
-		}
+
 		double[] ma = ema(volArr, maWindow);
 		int[] mxs = new int[visible.size()];
 		int[] mys = new int[visible.size()];
@@ -774,6 +759,7 @@ public class PriceGraphPanel extends JPanel
 			mxs[i] = plotLeft + (int) ((double) (p.getTimestamp() - startSec) / span * plotW);
 			mys[i] = plotBottom - (int) (Math.min(ma[i], axisMax) / axisMax * plotH);
 		}
+
 		g2.setStroke(new BasicStroke(1.2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
 		g2.setColor(MA_COLOR);
 		g2.draw(monotoneCubic(mxs, mys));
@@ -782,12 +768,18 @@ public class PriceGraphPanel extends JPanel
 	private void drawTooltip(Graphics2D g2, FontMetrics fm, String[] lines, int plotLeft, int plotTop, int plotRight)
 	{
 		int boxW = 0;
-		for (String s : lines) boxW = Math.max(boxW, fm.stringWidth(s));
+		for (String s : lines)
+			boxW = Math.max(boxW, fm.stringWidth(s));
+
 		boxW += 8;
 		int boxH = lines.length * (fm.getHeight() + 1) + 4;
 		int bx = hoverX + 8;
-		if (bx + boxW > plotRight) bx = hoverX - 8 - boxW;
-		if (bx < plotLeft) bx = plotLeft;
+		if (bx + boxW > plotRight)
+			bx = hoverX - 8 - boxW;
+
+		if (bx < plotLeft)
+			bx = plotLeft;
+
 		int by = plotTop + 4;
 		g2.setColor(new Color(20, 20, 20, 220));
 		g2.fillRoundRect(bx, by, boxW, boxH, 6, 6);
@@ -809,9 +801,8 @@ public class PriceGraphPanel extends JPanel
 		{
 			long ts = tick[0];
 			if (ts < startSec || ts > endSec)
-			{
 				continue;
-			}
+
 			int x = plotLeft + (int) ((double) (ts - startSec) / span * plotW);
 			String label = labelForTick(ts);
 			drawVerticalLabel(g2, label, x, plotBottom + X_AXIS_LABEL_GAP, fm);
@@ -850,12 +841,15 @@ public class PriceGraphPanel extends JPanel
 				cal.set(Calendar.MINUTE, 0);
 				cal.set(Calendar.HOUR_OF_DAY, 0);
 				cal.set(Calendar.DAY_OF_MONTH, 1);
-				if (cal.getTimeInMillis() / 1000L < startSec) cal.add(Calendar.MONTH, 1);
+				if (cal.getTimeInMillis() / 1000L < startSec)
+					cal.add(Calendar.MONTH, 1);
+
 				while (cal.getTimeInMillis() / 1000L <= endSec)
 				{
 					ticks.add(new long[]{cal.getTimeInMillis() / 1000L});
 					cal.add(Calendar.MONTH, 1);
 				}
+
 				break;
 			}
 			case MONTH:
@@ -865,7 +859,9 @@ public class PriceGraphPanel extends JPanel
 				if (expanded)
 				{
 					// Denser: every 3 days from the first midnight on/after the start.
-					if (cal.getTimeInMillis() / 1000L < startSec) cal.add(Calendar.DAY_OF_MONTH, 1);
+					if (cal.getTimeInMillis() / 1000L < startSec)
+						cal.add(Calendar.DAY_OF_MONTH, 1);
+
 					while (cal.getTimeInMillis() / 1000L <= endSec)
 					{
 						ticks.add(new long[]{cal.getTimeInMillis() / 1000L});
@@ -880,24 +876,29 @@ public class PriceGraphPanel extends JPanel
 					{
 						cal.add(Calendar.DAY_OF_MONTH, 1);
 					}
+
 					while (cal.getTimeInMillis() / 1000L <= endSec)
 					{
 						ticks.add(new long[]{cal.getTimeInMillis() / 1000L});
 						cal.add(Calendar.DAY_OF_MONTH, 7);
 					}
 				}
+
 				break;
 			}
 			case WEEK:
 			{
 				cal.set(Calendar.MINUTE, 0);
 				cal.set(Calendar.HOUR_OF_DAY, 0);
-				if (cal.getTimeInMillis() / 1000L < startSec) cal.add(Calendar.DAY_OF_MONTH, 1);
+				if (cal.getTimeInMillis() / 1000L < startSec)
+					cal.add(Calendar.DAY_OF_MONTH, 1);
+
 				while (cal.getTimeInMillis() / 1000L <= endSec)
 				{
 					ticks.add(new long[]{cal.getTimeInMillis() / 1000L});
 					cal.add(Calendar.DAY_OF_MONTH, 1);
 				}
+
 				break;
 			}
 			default: // H24
@@ -908,15 +909,19 @@ public class PriceGraphPanel extends JPanel
 				int rounded = ((hour + incrementHours - 1) / incrementHours) * incrementHours;
 				cal.set(Calendar.HOUR_OF_DAY, 0);
 				cal.add(Calendar.HOUR_OF_DAY, rounded);
-				if (cal.getTimeInMillis() / 1000L < startSec) cal.add(Calendar.HOUR_OF_DAY, incrementHours);
+				if (cal.getTimeInMillis() / 1000L < startSec)
+					cal.add(Calendar.HOUR_OF_DAY, incrementHours);
+
 				while (cal.getTimeInMillis() / 1000L <= endSec)
 				{
 					ticks.add(new long[]{cal.getTimeInMillis() / 1000L});
 					cal.add(Calendar.HOUR_OF_DAY, incrementHours);
 				}
+
 				break;
 			}
 		}
+
 		return ticks;
 	}
 
@@ -937,6 +942,7 @@ public class PriceGraphPanel extends JPanel
 				sdf = new SimpleDateFormat("ha", Locale.US);
 				break;
 		}
+
 		return sdf.format(d);
 	}
 
@@ -944,9 +950,8 @@ public class PriceGraphPanel extends JPanel
 	{
 		double[] out = new double[values.length];
 		if (values.length == 0)
-		{
 			return out;
-		}
+
 		double alpha = 2.0 / (period + 1);
 		double e = values[0];
 		out[0] = e;
@@ -955,6 +960,7 @@ public class PriceGraphPanel extends JPanel
 			e = alpha * values[i] + (1 - alpha) * e;
 			out[i] = e;
 		}
+
 		return out;
 	}
 
@@ -965,26 +971,24 @@ public class PriceGraphPanel extends JPanel
 	private Path2D buildSeriesPath(int[] xs, int[] ys, int n)
 	{
 		if (n <= 0)
-		{
 			return new Path2D.Double();
-		}
+
 		if (smooth && n >= 2)
 		{
 			// Light centred moving average to shave off jitter, then the spline.
 			double[] sy = movingAverage(ys, n, 3);
 			int[] syi = new int[n];
 			for (int i = 0; i < n; i++)
-			{
 				syi[i] = (int) Math.round(sy[i]);
-			}
+
 			return monotoneCubic(Arrays.copyOf(xs, n), syi);
 		}
+
 		Path2D path = new Path2D.Double();
 		path.moveTo(xs[0], ys[0]);
 		for (int i = 1; i < n; i++)
-		{
 			path.lineTo(xs[i], ys[i]);
-		}
+
 		return path;
 	}
 
@@ -999,11 +1003,11 @@ public class PriceGraphPanel extends JPanel
 			int hi = Math.min(n - 1, i + half);
 			double sum = 0;
 			for (int j = lo; j <= hi; j++)
-			{
 				sum += ys[j];
-			}
+
 			out[i] = sum / (hi - lo + 1);
 		}
+
 		return out;
 	}
 
@@ -1017,9 +1021,7 @@ public class PriceGraphPanel extends JPanel
 		Path2D path = new Path2D.Double();
 		int n0 = xsIn.length;
 		if (n0 == 0)
-		{
 			return path;
-		}
 
 		// Collapse points that map to the same pixel column (and any out-of-order
 		// x) so x is strictly increasing — required for the slope computations.
@@ -1033,6 +1035,7 @@ public class PriceGraphPanel extends JPanel
 				ys[n - 1] = ysIn[i];
 				continue;
 			}
+
 			xs[n] = xsIn[i];
 			ys[n] = ysIn[i];
 			n++;
@@ -1040,23 +1043,17 @@ public class PriceGraphPanel extends JPanel
 
 		path.moveTo(xs[0], ys[0]);
 		if (n == 1)
-		{
 			return path;
-		}
 
 		double[] delta = new double[n - 1];
 		for (int i = 0; i < n - 1; i++)
-		{
 			delta[i] = (ys[i + 1] - ys[i]) / (xs[i + 1] - xs[i]);
-		}
 
 		double[] m = new double[n];
 		m[0] = delta[0];
 		m[n - 1] = delta[n - 2];
 		for (int i = 1; i < n - 1; i++)
-		{
 			m[i] = (delta[i - 1] + delta[i]) / 2.0;
-		}
 
 		// Clamp tangents so each segment stays monotonic (no overshoot).
 		for (int i = 0; i < n - 1; i++)
@@ -1089,6 +1086,7 @@ public class PriceGraphPanel extends JPanel
 			double c2y = ys[i + 1] - m[i + 1] * h / 3.0;
 			path.curveTo(c1x, c1y, c2x, c2y, xs[i + 1], ys[i + 1]);
 		}
+
 		return path;
 	}
 
@@ -1106,6 +1104,7 @@ public class PriceGraphPanel extends JPanel
 				best = i;
 			}
 		}
+
 		return best;
 	}
 
@@ -1113,7 +1112,9 @@ public class PriceGraphPanel extends JPanel
 	{
 		long h = p.getAvgHighPrice();
 		long l = p.getAvgLowPrice();
-		if (h > 0 && l > 0) return (h + l) / 2;
+		if (h > 0 && l > 0)
+			return (h + l) / 2;
+
 		return Math.max(h, l);
 	}
 
@@ -1124,9 +1125,8 @@ public class PriceGraphPanel extends JPanel
 	private static double[] niceAxis(long dataMin, long dataMax, int minTicks, int maxTicks)
 	{
 		if (dataMax <= dataMin)
-		{
 			dataMax = dataMin + 1;
-		}
+
 		double range = dataMax - dataMin;
 		double[] niceMults = {1, 2, 2.5, 5};
 		double bestStep = range / minTicks;
@@ -1137,7 +1137,9 @@ public class PriceGraphPanel extends JPanel
 			for (double m : niceMults)
 			{
 				double step = m * pow;
-				if (step <= 0) continue;
+				if (step <= 0)
+					continue;
+
 				double aMin = Math.floor(dataMin / step) * step;
 				double aMax = Math.ceil(dataMax / step) * step;
 				int count = (int) Math.round((aMax - aMin) / step);
@@ -1148,10 +1150,10 @@ public class PriceGraphPanel extends JPanel
 				}
 			}
 		}
+
 		if (chosenStep < 0)
-		{
 			chosenStep = bestStep;
-		}
+
 		double axisMin = Math.floor(dataMin / chosenStep) * chosenStep;
 		double axisMax = Math.ceil(dataMax / chosenStep) * chosenStep;
 		int ticks = Math.max(1, (int) Math.round((axisMax - axisMin) / chosenStep));
@@ -1170,20 +1172,18 @@ public class PriceGraphPanel extends JPanel
 			{
 				double step = m * pow;
 				if (step >= per)
-				{
 					return (long) Math.max(1, Math.round(step));
-				}
 			}
 		}
+
 		return Math.max(1, target / intervals);
 	}
 
 	private static long percentile(List<Long> values, double p)
 	{
 		if (values.isEmpty())
-		{
 			return 0;
-		}
+
 		List<Long> sorted = new ArrayList<>(values);
 		Collections.sort(sorted);
 		int idx = (int) Math.ceil(p * sorted.size()) - 1;
@@ -1198,10 +1198,18 @@ public class PriceGraphPanel extends JPanel
 
 	private static String abbreviate(long v)
 	{
-		if (v <= 0) return "0";
-		if (v >= 1_000_000_000L) return oneDecimal(v / 1_000_000_000.0) + "B";
-		if (v >= 1_000_000L) return oneDecimal(v / 1_000_000.0) + "M";
-		if (v >= 1_000L) return oneDecimal(v / 1_000.0) + "K";
+		if (v <= 0)
+			return "0";
+
+		if (v >= 1_000_000_000L)
+			return oneDecimal(v / 1_000_000_000.0) + "B";
+
+		if (v >= 1_000_000L)
+			return oneDecimal(v / 1_000_000.0) + "M";
+
+		if (v >= 1_000L)
+			return oneDecimal(v / 1_000.0) + "K";
+
 		return Long.toString(v);
 	}
 
@@ -1210,9 +1218,8 @@ public class PriceGraphPanel extends JPanel
 	{
 		String s = String.format(Locale.US, "%.1f", d);
 		if (s.endsWith(".0"))
-		{
 			s = s.substring(0, s.length() - 2);
-		}
+
 		return s;
 	}
 }

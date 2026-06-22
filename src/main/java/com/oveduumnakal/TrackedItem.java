@@ -98,59 +98,26 @@ public class TrackedItem
 
 	public long getCostBasis()
 	{
-		long sum = 0;
-		for (AcquisitionRecord r : acquisitions)
-		{
-			if (r.getSoldAt() == null)
-			{
-				sum += (long) r.getQuantity() * r.getBoughtAt();
-			}
-		}
-		return sum;
+		return acquisitions.stream()
+				.filter(r -> r.getSoldAt() == null)
+				.mapToLong(r -> (long) r.getQuantity() * r.getBoughtAt())
+				.sum();
 	}
 
 	public long getRealizedProfit()
 	{
-		long sum = 0;
-		for (AcquisitionRecord r : acquisitions)
-		{
-			if (r.getSoldAt() != null)
-			{
-				sum += (long) r.getQuantity() * (r.getSoldAt() - r.getBoughtAt());
-			}
-		}
-		return sum;
-	}
-
-	public long getUnrealizedProfit()
-	{
-		long sum = 0;
-		for (AcquisitionRecord r : acquisitions)
-		{
-			if (r.getSoldAt() == null)
-			{
-				sum += (long) r.getQuantity() * (lowPrice - r.getBoughtAt());
-			}
-		}
-		return sum;
+		return acquisitions.stream()
+				.filter(r -> r.getSoldAt() != null)
+				.mapToLong(r -> (long) r.getQuantity() * (r.getSoldAt() - r.getBoughtAt()))
+				.sum();
 	}
 
 	public int getRecordQuantitySum()
 	{
-		int sum = 0;
-		for (AcquisitionRecord r : acquisitions)
-		{
-			if (r.getSoldAt() == null)
-			{
-				sum += r.getQuantity();
-			}
-		}
-		return sum;
-	}
-
-	public long getProfit()
-	{
-		return getRealizedProfit() + getUnrealizedProfit();
+		return acquisitions.stream()
+				.filter(r -> r.getSoldAt() == null)
+				.mapToInt(AcquisitionRecord::getQuantity)
+				.sum();
 	}
 
 	/**
@@ -160,14 +127,9 @@ public class TrackedItem
 	 */
 	public long getProfitAt(long markPrice)
 	{
-		long sum = getRealizedProfit();
-		for (AcquisitionRecord r : acquisitions)
-		{
-			if (r.getSoldAt() == null)
-			{
-				sum += (long) r.getQuantity() * (markPrice - r.getBoughtAt());
-			}
-		}
-		return sum;
+		return getRealizedProfit() + acquisitions.stream()
+				.filter(r -> r.getSoldAt() == null)
+				.mapToLong(r -> (long) r.getQuantity() * (markPrice - r.getBoughtAt()))
+				.sum();
 	}
 }

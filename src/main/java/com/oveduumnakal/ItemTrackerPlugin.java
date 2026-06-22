@@ -76,7 +76,6 @@ import java.util.*;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.stream.Collectors;
 
 @Slf4j
 @PluginDescriptor(
@@ -137,8 +136,12 @@ public class ItemTrackerPlugin extends Plugin
 	static
 	{
 		ImmutableSet.Builder<Integer> b = ImmutableSet.builder();
-		for (int v : RUNE_POUCH_TYPE_VARBITS) b.add(v);
-		for (int v : RUNE_POUCH_QUANTITY_VARBITS) b.add(v);
+		for (int v : RUNE_POUCH_TYPE_VARBITS)
+			b.add(v);
+
+		for (int v : RUNE_POUCH_QUANTITY_VARBITS)
+			b.add(v);
+
 		RUNE_POUCH_VARBITS = b.build();
 	}
 
@@ -223,9 +226,7 @@ public class ItemTrackerPlugin extends Plugin
 	{
 		Map<Integer, WikiRealtimePriceClient.ItemMapping> mappings = wikiPriceClient.fetchMapping();
 		if (!mappings.isEmpty())
-		{
 			itemMappings = mappings;
-		}
 	}
 
 	@Override
@@ -241,6 +242,7 @@ public class ItemTrackerPlugin extends Plugin
 			priceRefreshTask.cancel(false);
 			priceRefreshTask = null;
 		}
+
 		trackedItems.clear();
 		containerCounts.clear();
 		runePouchCounts.clear();
@@ -256,9 +258,7 @@ public class ItemTrackerPlugin extends Plugin
 	private void scheduleRefresh()
 	{
 		if (priceRefreshTask != null)
-		{
 			priceRefreshTask.cancel(false);
-		}
 
 		int rate = Math.max(30, config.priceRefreshSeconds());
 		priceRefreshTask = executor.scheduleAtFixedRate(
@@ -283,9 +283,7 @@ public class ItemTrackerPlugin extends Plugin
 		String saved = configManager.getRSProfileConfiguration(
 				ItemTrackerConfig.GROUP, ItemTrackerConfig.KEY_TRACKED_ITEMS);
 		if (saved == null || saved.trim().isEmpty())
-		{
 			return;
-		}
 
 		String trimmed = saved.trim();
 		if (trimmed.startsWith("["))
@@ -296,10 +294,9 @@ public class ItemTrackerPlugin extends Plugin
 				if (list != null)
 				{
 					for (PersistedItem p : list)
-					{
 						addTrackedItem(p.itemId, p.quantity, p.acquisitions, p.notifications, p.notificationsInitialized, p.costBasisInitialized, false, TrackItemMode.TRACK);
-					}
 				}
+
 				return;
 			}
 			catch (JsonSyntaxException e)
@@ -325,6 +322,7 @@ public class ItemTrackerPlugin extends Plugin
 			p.notificationsInitialized = item.isNotificationsInitialized();
 			list.add(p);
 		}
+
 		configManager.setRSProfileConfiguration(
 				ItemTrackerConfig.GROUP, ItemTrackerConfig.KEY_TRACKED_ITEMS, gson.toJson(list, PERSIST_TYPE));
 	}
@@ -351,9 +349,7 @@ public class ItemTrackerPlugin extends Plugin
 		clientThread.invokeLater(() ->
 		{
 			if (trackedItems.containsKey(itemId))
-			{
 				return;
-			}
 
 			var composition = itemManager.getItemComposition(itemId);
 			TrackedItem tracked = new TrackedItem(itemId, composition.getName());
@@ -361,21 +357,18 @@ public class ItemTrackerPlugin extends Plugin
 			tracked.setQuantity(initialQuantity);
 			tracked.setMode(mode == null ? TrackItemMode.TRACK : mode);
 			if (records != null)
-			{
 				tracked.setAcquisitions(new ArrayList<>(records));
-			}
+
 			if (notifications != null)
-			{
 				tracked.setNotifications(new ArrayList<>(notifications));
-			}
+
 			tracked.setNotificationsInitialized(notificationsInitialized);
 			tracked.setCostBasisInitialized(costBasisInitialized);
 			trackedItems.put(itemId, tracked);
 
 			if (syncOnAdd && tracked.getMode() == TrackItemMode.TRACK)
-			{
 				syncQuantitiesForItem(tracked);
-			}
+
 			persistTrackedItems();
 			refreshPanel();
 			refreshGePrices();
@@ -412,7 +405,7 @@ public class ItemTrackerPlugin extends Plugin
 	 * Lightweight periodic fetch used to keep the main panel's per-window
 	 * stats (including 24h volume) current. Only the 5m resolution is pulled.
 	 */
-	private void requestSeries(int itemId, TimeWindow window, boolean refreshAfter)
+	private void requestSeries(int itemId, boolean refreshAfter)
 	{
 		executor.execute(() ->
 		{
@@ -421,15 +414,12 @@ public class ItemTrackerPlugin extends Plugin
 			{
 				TrackedItem tracked = trackedItems.get(itemId);
 				if (tracked == null)
-				{
 					return;
-				}
+
 				tracked.setSeries5m(points);
 				recomputeWindowStats(tracked);
 				if (refreshAfter)
-				{
 					refreshPanel();
-				}
 			});
 		});
 	}
@@ -452,9 +442,8 @@ public class ItemTrackerPlugin extends Plugin
 			{
 				TrackedItem tracked = trackedItems.get(itemId);
 				if (tracked == null)
-				{
 					return;
-				}
+
 				tracked.setSeries5m(s5);
 				tracked.setSeries1h(s1h);
 				tracked.setSeries6h(s6);
@@ -484,13 +473,10 @@ public class ItemTrackerPlugin extends Plugin
 		for (TimeWindow w : TimeWindow.values())
 		{
 			if (w == TimeWindow.NONE)
-			{
 				continue;
-			}
+
 			if (w == TimeWindow.LIVE)
-			{
 				stats.put(w, new PriceStats(tracked.getHighPrice(), tracked.getLowPrice(), tracked.getAvgPrice(), 0));
-			}
 			else
 			{
 				// Prefer the resolution that best covers the window, but fall back
@@ -498,12 +484,12 @@ public class ItemTrackerPlugin extends Plugin
 				// the coarser series so the main panel stays populated.
 				List<WikiRealtimePriceClient.PricePoint> series = tracked.getSeriesFor(w);
 				if (series.isEmpty())
-				{
 					series = tracked.getSeries5m();
-				}
+
 				stats.put(w, WikiRealtimePriceClient.computeStats(series, w));
 			}
 		}
+
 		tracked.setWindowStats(stats);
 	}
 
@@ -511,9 +497,8 @@ public class ItemTrackerPlugin extends Plugin
 	{
 		WikiRealtimePriceClient.ItemMapping mapping = itemMappings.get(tracked.getItemId());
 		if (mapping == null)
-		{
 			return;
-		}
+
 		tracked.setBuyLimit(mapping.getLimit());
 		tracked.setGeValue(mapping.getValue());
 		tracked.setHighAlch(mapping.getHighAlch());
@@ -525,9 +510,8 @@ public class ItemTrackerPlugin extends Plugin
 	{
 		TrackedItem tracked = trackedItems.get(itemId);
 		if (tracked != null && tracked.getAvgPrice() > 0)
-		{
 			return tracked.getAvgPrice();
-		}
+
 		// Fall back to the item manager's cached GE price when the rune isn't tracked.
 		return Math.max(0, itemManager.getItemPrice(itemId));
 	}
@@ -538,9 +522,8 @@ public class ItemTrackerPlugin extends Plugin
 		{
 			TrackedItem tracked = trackedItems.get(itemId);
 			if (tracked == null)
-			{
 				return;
-			}
+
 			tracked.getAcquisitions().clear();
 			persistTrackedItems();
 			refreshPanel();
@@ -576,6 +559,7 @@ public class ItemTrackerPlugin extends Plugin
 					item.setPrevAvgPrice(item.getAvgPrice());
 					item.setHasDeltas(true);
 				}
+
 				item.setHighPrice(prices.getHigh());
 				item.setLowPrice(prices.getLow());
 				item.setAvgPrice(prices.avg());
@@ -586,17 +570,14 @@ public class ItemTrackerPlugin extends Plugin
 				if (!item.isCostBasisInitialized())
 				{
 					if (item.getQuantity() > 0 && item.getAcquisitions().isEmpty())
-					{
 						addOpenAcquisition(item, item.getQuantity(), autoAddPrice(item));
-					}
+
 					item.setCostBasisInitialized(true);
 					persistTrackedItems();
 				}
 			}
 			else if (!item.hasPrices() && item.isTradeable())
-			{
 				item.setPriceLoadFailed(true);
-			}
 		}
 
 		if (fetchFailed)
@@ -617,13 +598,9 @@ public class ItemTrackerPlugin extends Plugin
 				// The open detail item gets the full multi-resolution refresh;
 				// everything else just refreshes the cheap 5m stats.
 				if (item.getItemId() == detailId)
-				{
 					requestDetailData(item.getItemId());
-				}
 				else
-				{
-					requestSeries(item.getItemId(), TimeWindow.H24, false);
-				}
+					requestSeries(item.getItemId(), false);
 			}
 		}
 	}
@@ -632,9 +609,7 @@ public class ItemTrackerPlugin extends Plugin
 	public void onConfigChanged(ConfigChanged event)
 	{
 		if (!ItemTrackerConfig.GROUP.equals(event.getGroup()))
-		{
 			return;
-		}
 
 		if (SECTION_SLOT_KEYS.contains(event.getKey()))
 		{
@@ -647,6 +622,7 @@ public class ItemTrackerPlugin extends Plugin
 				// dropdown would keep showing its old value. Force the panel to rebuild.
 				rebuildOpenConfigPanel();
 			}
+
 			return;
 		}
 
@@ -698,16 +674,13 @@ public class ItemTrackerPlugin extends Plugin
 		}
 
 		if (newSlot == SectionSlot.NONE || newSlot == oldSlot)
-		{
 			return false;
-		}
 
 		for (String key : SECTION_SLOT_KEYS)
 		{
 			if (key.equals(event.getKey()))
-			{
 				continue;
-			}
+
 			SectionSlot other = configManager.getConfiguration(
 					ItemTrackerConfig.GROUP, key, SectionSlot.class);
 			if (other == newSlot)
@@ -716,6 +689,7 @@ public class ItemTrackerPlugin extends Plugin
 				return true;
 			}
 		}
+
 		return false;
 	}
 
@@ -738,9 +712,7 @@ public class ItemTrackerPlugin extends Plugin
 				for (java.awt.Window window : java.awt.Window.getWindows())
 				{
 					for (java.awt.Component panel : findComponents(window, configPanelClass))
-					{
 						rebuild.invoke(panel);
-					}
 				}
 			}
 			catch (ReflectiveOperationException e)
@@ -755,16 +727,14 @@ public class ItemTrackerPlugin extends Plugin
 	{
 		List<java.awt.Component> found = new ArrayList<>();
 		if (type.isInstance(root))
-		{
 			found.add(root);
-		}
+
 		if (root instanceof java.awt.Container)
 		{
 			for (java.awt.Component child : ((java.awt.Container) root).getComponents())
-			{
 				found.addAll(findComponents(child, type));
-			}
 		}
+
 		return found;
 	}
 
@@ -772,9 +742,7 @@ public class ItemTrackerPlugin extends Plugin
 	public void onMenuOpened(MenuOpened event)
 	{
 		if (!config.addContextMenuOption())
-		{
 			return;
-		}
 
 		final MenuEntry[] entries = event.getMenuEntries();
 		for (int idx = entries.length - 1; idx >= 0; --idx)
@@ -782,9 +750,7 @@ public class ItemTrackerPlugin extends Plugin
 			final MenuEntry entry = entries[idx];
 			int itemId = getItemIdFromMenuEntry(entry);
 			if (itemId <= 0)
-			{
 				continue;
-			}
 
 			final int canonicalId = itemManager.canonicalize(itemId);
 			final boolean tracked = trackedItems.containsKey(canonicalId);
@@ -798,13 +764,9 @@ public class ItemTrackerPlugin extends Plugin
 					.onClick(e ->
 					{
 						if (tracked)
-						{
 							removeTrackedItem(canonicalId);
-						}
 						else
-						{
 							addTrackedItem(canonicalId);
-						}
 					});
 			return;
 		}
@@ -827,9 +789,7 @@ public class ItemTrackerPlugin extends Plugin
 
 		Widget w = entry.getWidget();
 		if (w == null)
-		{
 			return -1;
-		}
 
 		int interfaceId = WidgetUtil.componentToInterface(w.getId());
 		if (interfaceId == InterfaceID.INVENTORY
@@ -838,6 +798,7 @@ public class ItemTrackerPlugin extends Plugin
 		{
 			return w.getItemId();
 		}
+
 		return -1;
 	}
 
@@ -846,9 +807,7 @@ public class ItemTrackerPlugin extends Plugin
 	{
 		int containerId = event.getContainerId();
 		if (!TRACKED_CONTAINERS.contains(containerId))
-		{
 			return;
-		}
 
 		boolean firstSync = seenContainersSinceLogin.add(containerId);
 
@@ -860,9 +819,7 @@ public class ItemTrackerPlugin extends Plugin
 			for (Item item : container.getItems())
 			{
 				if (item.getId() > 0)
-				{
 					newCounts.merge(item.getId(), item.getQuantity(), Integer::sum);
-				}
 			}
 		}
 
@@ -874,19 +831,17 @@ public class ItemTrackerPlugin extends Plugin
 			{
 				int delta = newCounts.getOrDefault(itemId, 0) - oldCounts.getOrDefault(itemId, 0);
 				if (delta != 0)
-				{
 					pendingItemDeltas.merge(itemId, delta, Integer::sum);
-				}
 			}
+
 			pendingQuantitySync = true;
 		}
 
 		containerCounts.put(containerId, newCounts);
 
 		if (firstSync && containerId == InventoryID.BANK && config.autoAddItems() != AutoAddMode.OFF)
-		{
 			reconcileAllQuantities();
-		}
+
 		refreshPanel();
 	}
 
@@ -899,10 +854,12 @@ public class ItemTrackerPlugin extends Plugin
 			syncQuantitiesFromContainers();
 		}
 
+		// Evaluate every tick (cheap: numeric comparisons) so rules fire promptly on
+		// quantity/price changes from any source, not only on the periodic price poll.
+		evaluateNotifications();
+
 		if (!config.highlightTrackedItems().ground() || client.isMenuOpen())
-		{
 			return;
-		}
 
 		final MenuEntry[] entries = client.getMenuEntries();
 		final List<MenuEntry> normal = new ArrayList<>(entries.length);
@@ -916,15 +873,11 @@ public class ItemTrackerPlugin extends Plugin
 				trackedTakes.add(entry);
 			}
 			else
-			{
 				normal.add(entry);
-			}
 		}
 
 		if (trackedTakes.isEmpty())
-		{
 			return;
-		}
 
 		normal.addAll(trackedTakes);
 		client.setMenuEntries(normal.toArray(new MenuEntry[0]));
@@ -987,12 +940,12 @@ public class ItemTrackerPlugin extends Plugin
 				{
 					int delta = runePouchCounts.getOrDefault(itemId, 0) - oldPouch.getOrDefault(itemId, 0);
 					if (delta != 0)
-					{
 						pendingItemDeltas.merge(itemId, delta, Integer::sum);
-					}
 				}
+
 				pendingQuantitySync = true;
 			}
+
 			refreshPanel();
 		}
 	}
@@ -1006,9 +959,8 @@ public class ItemTrackerPlugin extends Plugin
 			int typeId = client.getVarbitValue(RUNE_POUCH_TYPE_VARBITS[i]);
 			int qty    = client.getVarbitValue(RUNE_POUCH_QUANTITY_VARBITS[i]);
 			if (typeId == 0 || qty <= 0)
-			{
 				continue;
-			}
+
 			int itemId = runeEnum.getIntValue(typeId);
 			runePouchCounts.merge(itemId, qty, Integer::sum);
 		}
@@ -1039,9 +991,8 @@ public class ItemTrackerPlugin extends Plugin
 	private void addOpenAcquisition(TrackedItem tracked, int qty, long boughtAt)
 	{
 		if (qty <= 0)
-		{
 			return;
-		}
+
 		List<AcquisitionRecord> records = tracked.getAcquisitions();
 
 		int undoBudget = qty;
@@ -1055,9 +1006,8 @@ public class ItemTrackerPlugin extends Plugin
 				int undo = Math.min(r.getQuantity(), undoBudget);
 				r.setQuantity(r.getQuantity() - undo);
 				if (r.getQuantity() == 0)
-				{
 					it.remove();
-				}
+
 				undoBudget -= undo;
 			}
 		}
@@ -1070,6 +1020,7 @@ public class ItemTrackerPlugin extends Plugin
 				return;
 			}
 		}
+
 		records.add(new AcquisitionRecord(qty, boughtAt, null));
 	}
 
@@ -1084,6 +1035,7 @@ public class ItemTrackerPlugin extends Plugin
 				return true;
 			}
 		}
+
 		return false;
 	}
 
@@ -1101,9 +1053,8 @@ public class ItemTrackerPlugin extends Plugin
 				int cancel = Math.min(r.getQuantity(), remaining);
 				r.setQuantity(r.getQuantity() - cancel);
 				if (r.getQuantity() == 0)
-				{
 					cancelIt.remove();
-				}
+
 				remaining -= cancel;
 			}
 		}
@@ -1117,14 +1068,13 @@ public class ItemTrackerPlugin extends Plugin
 				i++;
 				continue;
 			}
+
 			if (r.getQuantity() <= remaining)
 			{
 				int closeQty = r.getQuantity();
 				remaining -= closeQty;
 				if (mergeClosed(records, closeQty, r.getBoughtAt(), soldAtPrice))
-				{
 					records.remove(i);
-				}
 				else
 				{
 					r.setSoldAt(soldAtPrice);
@@ -1137,9 +1087,7 @@ public class ItemTrackerPlugin extends Plugin
 				r.setQuantity(r.getQuantity() - closeQty);
 				remaining = 0;
 				if (!mergeClosed(records, closeQty, r.getBoughtAt(), soldAtPrice))
-				{
 					records.add(i, new AcquisitionRecord(closeQty, r.getBoughtAt(), soldAtPrice));
-				}
 			}
 		}
 	}
@@ -1147,38 +1095,32 @@ public class ItemTrackerPlugin extends Plugin
 	private void syncQuantitiesFromContainers()
 	{
 		if (pendingItemDeltas.isEmpty())
-		{
 			return;
-		}
+
 		Map<Integer, Integer> deltas = new HashMap<>(pendingItemDeltas);
 		pendingItemDeltas.clear();
 		if (config.autoAddItems() == AutoAddMode.OFF || trackedItems.isEmpty())
-		{
 			return;
-		}
+
 		boolean changed = false;
 		for (TrackedItem tracked : trackedItems.values())
 		{
 			if (tracked.getMode() != TrackItemMode.TRACK)
-			{
 				continue;
-			}
+
 			Integer delta = deltas.get(tracked.getItemId());
 			if (delta == null || delta == 0)
-			{
 				continue;
-			}
+
 			if (delta > 0)
-			{
 				addOpenAcquisition(tracked, delta, autoAddPrice(tracked));
-			}
 			else
-			{
 				closeFifo(tracked, -delta, tracked.getAvgPrice());
-			}
+
 			tracked.setQuantity(tracked.getQuantity() + delta);
 			changed = true;
 		}
+
 		if (changed)
 		{
 			persistTrackedItems();
@@ -1190,41 +1132,35 @@ public class ItemTrackerPlugin extends Plugin
 	{
 		pendingItemDeltas.clear();
 		if (client.getGameState() != GameState.LOGGED_IN || trackedItems.isEmpty())
-		{
 			return;
-		}
 
 		for (int containerId : TRACKED_CONTAINERS)
 		{
 			ItemContainer container = client.getItemContainer(containerId);
 			if (container == null)
-			{
 				continue;
-			}
+
 			Map<Integer, Integer> counts = containerCounts.computeIfAbsent(containerId, k -> new HashMap<>());
 			counts.clear();
 			for (Item item : container.getItems())
 			{
 				if (item.getId() > 0)
-				{
 					counts.merge(item.getId(), item.getQuantity(), Integer::sum);
-				}
 			}
 		}
+
 		syncRunePouch();
 
 		boolean changed = false;
 		for (TrackedItem tracked : trackedItems.values())
 		{
 			if (tracked.getMode() != TrackItemMode.TRACK)
-			{
 				continue;
-			}
-			int total = runePouchCounts.getOrDefault(tracked.getItemId(), 0);
-			for (Map<Integer, Integer> c : containerCounts.values())
-			{
-				total += c.getOrDefault(tracked.getItemId(), 0);
-			}
+
+			int total = runePouchCounts.getOrDefault(tracked.getItemId(), 0)
+					+ containerCounts.values().stream()
+					.mapToInt(c -> c.getOrDefault(tracked.getItemId(), 0))
+					.sum();
 			int logDelta = total - tracked.getRecordQuantitySum();
 			if (logDelta > 0)
 			{
@@ -1236,51 +1172,44 @@ public class ItemTrackerPlugin extends Plugin
 				closeFifo(tracked, -logDelta, tracked.getAvgPrice());
 				changed = true;
 			}
+
 			if (tracked.getQuantity() != total)
 			{
 				tracked.setQuantity(total);
 				changed = true;
 			}
 		}
+
 		if (changed)
-		{
 			persistTrackedItems();
-		}
 	}
 
 	private void syncQuantitiesForItem(TrackedItem tracked)
 	{
 		if (client.getGameState() != GameState.LOGGED_IN)
-		{
 			return;
-		}
 
 		for (int containerId : TRACKED_CONTAINERS)
 		{
 			ItemContainer container = client.getItemContainer(containerId);
 			if (container == null)
-			{
 				continue;
-			}
 
 			Map<Integer, Integer> counts = containerCounts.computeIfAbsent(containerId, k -> new HashMap<>());
 			counts.clear();
 			for (Item item : container.getItems())
 			{
 				if (item.getId() > 0)
-				{
 					counts.merge(item.getId(), item.getQuantity(), Integer::sum);
-				}
 			}
 		}
 
 		syncRunePouch();
 
-		int total = runePouchCounts.getOrDefault(tracked.getItemId(), 0);
-		for (Map<Integer, Integer> c : containerCounts.values())
-		{
-			total += c.getOrDefault(tracked.getItemId(), 0);
-		}
+		int total = runePouchCounts.getOrDefault(tracked.getItemId(), 0)
+				+ containerCounts.values().stream()
+				.mapToInt(c -> c.getOrDefault(tracked.getItemId(), 0))
+				.sum();
 		tracked.setQuantity(total);
 	}
 
@@ -1295,9 +1224,8 @@ public class ItemTrackerPlugin extends Plugin
 		{
 			TrackedItem tracked = trackedItems.get(itemId);
 			if (tracked == null)
-			{
 				return;
-			}
+
 			tracked.setCostBasisInitialized(true);
 			tracked.setQuantity(tracked.getRecordQuantitySum());
 			persistTrackedItems();
@@ -1310,9 +1238,7 @@ public class ItemTrackerPlugin extends Plugin
 		clientThread.invokeLater(() ->
 		{
 			if (trackedItems.containsKey(itemId))
-			{
 				persistTrackedItems();
-			}
 		});
 	}
 
@@ -1380,16 +1306,13 @@ public class ItemTrackerPlugin extends Plugin
 	{
 		Notification style = config.notificationStyle();
 		if (!style.isEnabled())
-		{
 			return;
-		}
+
 		// Hold off while the user is editing a rule: firing removes the rule and
 		// refreshes the panel, which would wedge the open cell editor. Evaluation
 		// resumes on the next tick once they finish editing.
 		if (panel.isEditingNotifications())
-		{
 			return;
-		}
 
 		boolean changed = false;
 		for (TrackedItem item : trackedItems.values())
@@ -1404,6 +1327,7 @@ public class ItemTrackerPlugin extends Plugin
 					// Required data not ready yet, or a blank row; leave it in place.
 					continue;
 				}
+
 				if (condition)
 				{
 					// One-and-done: fire once, then drop the rule from the list.
@@ -1430,38 +1354,34 @@ public class ItemTrackerPlugin extends Plugin
 			// Incomplete (blank) row; nothing to evaluate.
 			return null;
 		}
+
 		if (metric.isCategorical())
 		{
 			String current = categoryValue(item, metric);
 			if (current == null || rule.getValue() == null)
-			{
 				return null;
-			}
+
 			return current.equalsIgnoreCase(rule.getValue().trim());
 		}
 
 		TimeWindow window = metric.locksTimeframeToMonth() ? TimeWindow.MONTH : rule.getTimeWindow();
 		OptionalDouble current = numericValue(item, metric, window);
 		if (!current.isPresent())
-		{
 			return null;
-		}
+
 		OptionalDouble target = metric.getKind() == NotificationMetric.Kind.PERCENT
 				? NotificationRule.parsePercent(rule.getValue())
 				: NotificationRule.parseNumeric(rule.getValue());
 		if (!target.isPresent())
-		{
 			return null;
-		}
+
 		return rule.getOperation().test(current.getAsDouble(), target.getAsDouble());
 	}
 
 	private OptionalDouble numericValue(TrackedItem item, NotificationMetric metric, TimeWindow window)
 	{
 		if (metric == NotificationMetric.QUANTITY)
-		{
 			return OptionalDouble.of(item.getQuantity());
-		}
 
 		PriceStats s = item.getWindowStats().get(window);
 		long avg = s == null ? 0 : s.getAvg();
@@ -1479,17 +1399,15 @@ public class ItemTrackerPlugin extends Plugin
 				return avg <= 0 ? OptionalDouble.empty() : OptionalDouble.of(item.getProfitAt(avg));
 			case HA_PROFIT:
 				if (avg <= 0 || item.getHighAlch() <= 0)
-				{
 					return OptionalDouble.empty();
-				}
+
 				return OptionalDouble.of(item.getHighAlch() - avg - runePrice(NATURE_RUNE_ID) - 5 * runePrice(FIRE_RUNE_ID));
 			case DELTA_PCT:
 			{
 				long current = item.getAvgPrice();
 				if (current <= 0 || avg <= 0)
-				{
 					return OptionalDouble.empty();
-				}
+
 				return OptionalDouble.of(Math.round(((double) (current - avg) / avg) * 1000.0) / 10.0);
 			}
 			default:
@@ -1523,9 +1441,7 @@ public class ItemTrackerPlugin extends Plugin
 		NotificationMetric metric = rule.getMetric();
 		String valueDisplay;
 		if (metric.isCategorical())
-		{
 			valueDisplay = rule.getValue();
-		}
 		else if (metric.getKind() == NotificationMetric.Kind.PERCENT)
 		{
 			OptionalDouble v = NotificationRule.parsePercent(rule.getValue());
@@ -1538,6 +1454,7 @@ public class ItemTrackerPlugin extends Plugin
 					? String.format(Locale.US, "%,d", Math.round(v.getAsDouble()))
 					: rule.getValue();
 		}
+
 		return "Item Tracker: " + item.getName() + " - " + metric.getDisplayName()
 				+ " " + rule.getOperation().getSymbol() + " " + valueDisplay;
 	}

@@ -61,9 +61,7 @@ public class ItemTrackerGroundOverlay extends Overlay
 	public Dimension render(Graphics2D graphics)
 	{
 		if (!config.highlightTrackedItems().ground())
-		{
 			return null;
-		}
 
 		Color base = config.highlightColor();
 		Color breathing = new Color(base.getRed(), base.getGreen(), base.getBlue(),
@@ -72,9 +70,7 @@ public class ItemTrackerGroundOverlay extends Overlay
 		for (Map.Entry<TileItem, Tile> entry : plugin.getGroundItems().entrySet())
 		{
 			if (!plugin.isTracked(itemManager.canonicalize(entry.getKey().getId())))
-			{
 				continue;
-			}
 
 			Tile tile = entry.getValue();
 			Shape poly = Perspective.getCanvasTilePoly(client, tile.getLocalLocation());
@@ -84,6 +80,7 @@ public class ItemTrackerGroundOverlay extends Overlay
 				graphics.draw(poly);
 			}
 		}
+
 		return null;
 	}
 }
