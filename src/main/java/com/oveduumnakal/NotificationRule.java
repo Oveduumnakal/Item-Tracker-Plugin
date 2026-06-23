@@ -10,31 +10,30 @@ import java.util.Locale;
 import java.util.OptionalDouble;
 
 /**
- * A single per-item notification rule: when the chosen {@link NotificationMetric}
- * over the chosen {@link TimeWindow} satisfies {@link NotificationOperation}
- * against {@link #value}, a notification fires.
+ * One user-defined alert condition on a tracked item: when {@code metric} over
+ * {@code timeWindow}, compared with {@code operation} against {@code value},
+ * holds true.
  *
- * <p>{@code value} is stored as the normalized display string the user sees
- * (e.g. {@code "5m"}, {@code "10%"}, {@code "Highest"}). The static
- * parse/format helpers convert between that text and the numeric value used for
- * comparison, keeping the panel (on edit) and the plugin (on evaluation) in
- * agreement.
- *
- * <p>Rules are one-and-done: a rule fires exactly once and is then removed from
- * its item's list.
+ * <p>{@code value} is stored as the raw text the user typed (e.g. {@code "5m"},
+ * {@code "10%"}, or a category like {@code "High"}); the static helpers here
+ * parse that text into comparable numbers for evaluation and format numbers back
+ * for display.
  */
 @Data
 public class NotificationRule
 {
-	// Null/blank until the user fills the row in; an incomplete rule never fires.
+
 	private NotificationMetric metric;
 	private TimeWindow timeWindow;
 	private NotificationOperation operation;
 	private String value = "";
 
 	/**
-	 * Parses a numeric value entered in short form (commas, k/m/b suffixes,
-	 * decimals). Returns empty when the text cannot be parsed.
+	 * Parses a numeric threshold, accepting commas and a k/m/b suffix
+	 * (e.g. {@code "1,500"}, {@code "5m"} &rarr; 5,000,000).
+	 *
+	 * @param text the raw user input
+	 * @return the parsed value, or empty if blank or unparseable
 	 */
 	public static OptionalDouble parseNumeric(String text)
 	{
@@ -68,10 +67,11 @@ public class NotificationRule
 	}
 
 	/**
-	 * Parses a percentage value. A trailing {@code %} is taken literally
-	 * ({@code "5.5%"} → 5.5); a bare fraction below 1 is read as a ratio
-	 * ({@code "0.1"} → 10); anything else is read as a literal percent
-	 * ({@code "10"} → 10).
+	 * Parses a percent threshold. A trailing {@code %} is optional; when omitted,
+	 * a bare fraction below 1 (e.g. {@code 0.05}) is treated as 5%.
+	 *
+	 * @param text the raw user input
+	 * @return the percent value, or empty if blank or unparseable
 	 */
 	public static OptionalDouble parsePercent(String text)
 	{
@@ -100,7 +100,7 @@ public class NotificationRule
 		}
 	}
 
-	/** Formats a percentage as {@code NN.N%} or {@code NN%} when whole. */
+	/** Formats a percent as {@code NN%} when whole, otherwise {@code NN.N%}. */
 	public static String formatPercent(double value)
 	{
 		if (value == Math.rint(value))

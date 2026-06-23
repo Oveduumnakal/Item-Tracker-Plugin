@@ -11,6 +11,17 @@ import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * The full state of one item being tracked: its identity and quantity, the
+ * latest wiki prices (high/low/average) and their deltas, per-window summary
+ * stats and price history, GE metadata (buy limit, alch values), and the
+ * acquisition lots that back its cost-basis profit calculations.
+ *
+ * <p>Price-history {@code series*} lists are {@code transient}: they are fetched
+ * at runtime and not persisted with the rest of the item. The value/profit
+ * accessors derive figures from {@code quantity}, the current prices, and the
+ * {@link AcquisitionRecord} lots.
+ */
 @Data
 public class TrackedItem
 {
@@ -36,19 +47,17 @@ public class TrackedItem
 	private boolean costBasisInitialized;
 	private List<AcquisitionRecord> acquisitions = new ArrayList<>();
 	private List<NotificationRule> notifications = new ArrayList<>();
-	/** True once the notifications table has been seeded with its default rows. */
+
 	private boolean notificationsInitialized;
 
 	private TrackItemMode mode = TrackItemMode.TRACK;
 	private Map<TimeWindow, PriceStats> windowStats = new EnumMap<>(TimeWindow.class);
 
-	// Timeseries at the Wiki resolutions, used by the detailed view.
 	private transient List<WikiRealtimePriceClient.PricePoint> series5m = new ArrayList<>();
 	private transient List<WikiRealtimePriceClient.PricePoint> series1h = new ArrayList<>();
 	private transient List<WikiRealtimePriceClient.PricePoint> series6h = new ArrayList<>();
 	private transient List<WikiRealtimePriceClient.PricePoint> series24h = new ArrayList<>();
 
-	// Static item metadata sourced from the Wiki /mapping endpoint.
 	private int buyLimit;
 	private long geValue;
 	private long highAlch;
@@ -56,8 +65,12 @@ public class TrackedItem
 	private boolean metadataLoaded;
 
 	/**
-	 * Returns the timeseries resolution best suited to the given window.
-	 * Short windows use 5m data, week/month use 6h, year uses 24h.
+	 * Selects the price-history series whose sampling granularity best fits the
+	 * given window: 1h points for a week, 6h for a month, 24h for quarter/half/year,
+	 * and 5m points for anything shorter.
+	 *
+	 * @param window the time window being displayed
+	 * @return the backing point list (live, not a copy)
 	 */
 	public List<WikiRealtimePriceClient.PricePoint> getSeriesFor(TimeWindow window)
 	{
@@ -96,6 +109,7 @@ public class TrackedItem
 		return highPrice > 0 || lowPrice > 0;
 	}
 
+	/** @return total gp paid for the lots still held (unsold acquisitions). */
 	public long getCostBasis()
 	{
 		return acquisitions.stream()
@@ -104,6 +118,7 @@ public class TrackedItem
 				.sum();
 	}
 
+	/** @return profit already locked in from sold lots: sum of qty * (sold - bought). */
 	public long getRealizedProfit()
 	{
 		return acquisitions.stream()
@@ -112,6 +127,7 @@ public class TrackedItem
 				.sum();
 	}
 
+	/** @return total units across the lots still held (unsold acquisitions). */
 	public int getRecordQuantitySum()
 	{
 		return acquisitions.stream()
@@ -121,9 +137,11 @@ public class TrackedItem
 	}
 
 	/**
-	 * Profit valuing open positions at {@code markPrice} instead of the live low
-	 * price. Used by notification rules so an item's profit can be evaluated
-	 * against a selected time window's average price.
+	 * Total profit if the held lots were valued at {@code markPrice}: realized
+	 * profit from sold lots plus the unrealized gain/loss on still-held lots.
+	 *
+	 * @param markPrice the per-unit price used to mark held lots to market
+	 * @return realized plus unrealized profit in gp
 	 */
 	public long getProfitAt(long markPrice)
 	{

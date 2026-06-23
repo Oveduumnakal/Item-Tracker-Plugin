@@ -5,9 +5,9 @@
 package com.oveduumnakal;
 
 /**
- * Vertical spacing of the GE Estimates value rows. {@link #DEFAULT} keeps the
- * roomier estimate-row spacing; {@link #COMPACT} tightens it to match the
- * tracked items list.
+ * Vertical density of the GE value estimate rows &ndash; normal
+ * ({@link #DEFAULT}) or tightened ({@link #COMPACT}) padding. The {@code label}
+ * is the name shown in the config dropdown.
  */
 public enum EstimatesSpacing
 {

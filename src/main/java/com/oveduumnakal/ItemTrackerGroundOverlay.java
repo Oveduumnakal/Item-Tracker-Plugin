@@ -39,6 +39,14 @@ import net.runelite.client.ui.overlay.Overlay;
 import net.runelite.client.ui.overlay.OverlayLayer;
 import net.runelite.client.ui.overlay.OverlayPosition;
 
+/**
+ * Scene overlay that outlines tracked items lying on the ground.
+ *
+ * <p>On each frame it walks the plugin's known ground items, keeps those whose
+ * canonical id is tracked, and draws their tile polygon in the configured
+ * highlight color &ndash; pulsing via the plugin's breathing alpha. Does nothing
+ * when ground highlighting is disabled in config.
+ */
 public class ItemTrackerGroundOverlay extends Overlay
 {
 	private final Client client;

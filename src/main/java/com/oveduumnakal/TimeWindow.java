@@ -6,6 +6,16 @@ package com.oveduumnakal;
 
 import java.time.Duration;
 
+/**
+ * A look-back period over which prices and volumes are summarized, from the
+ * latest 5-minute snapshot ({@link #LIVE}) up to a {@link #YEAR}.
+ *
+ * <p>Each constant carries three forms: a compact {@code label} for tight chips
+ * (e.g. {@code "1mo"}), a spelled-out {@code longLabel} for headers
+ * (e.g. {@code "1 Month"}), and a {@code duration} used to bound queries.
+ * {@link #NONE} and {@link #LIVE} have a zero duration; {@link #NONE} is a
+ * not-applicable placeholder.
+ */
 public enum TimeWindow
 {
 	NONE("None", Duration.ZERO, "None"),
@@ -37,7 +47,6 @@ public enum TimeWindow
 		return label;
 	}
 
-	/** Spelled-out label, e.g. "1 Hour" / "24 Hour". */
 	public String getLongLabel()
 	{
 		return longLabel;

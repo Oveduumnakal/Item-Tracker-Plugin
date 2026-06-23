@@ -72,6 +72,22 @@ import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
+/**
+ * The plugin's side panel and its entire Swing UI.
+ *
+ * <p>Uses a {@link CardLayout} to switch between two views: the main list of
+ * tracked items (with search, totals, and per-row prices/value/profit) and a
+ * per-item detail card (current values, market info, price/volume charts, a
+ * price overview grid, alch info, notification rules, and an editable
+ * acquisitions log). It also manages detail-section ordering/visibility, the
+ * price-change pulse animations, and the chart pop-out windows.
+ *
+ * <p>The panel is purely a view: it never touches game state directly. All
+ * actions (add/remove item, edit acquisitions/notifications, request detail
+ * data, clear) are delegated to the plugin through the callbacks supplied to the
+ * constructor, and the plugin pushes data back via {@link #rebuild} and
+ * {@link #refreshDetailData}. All methods run on the Swing EDT.
+ */
 @Slf4j
 public class ItemTrackerPanel extends PluginPanel
 {
@@ -97,9 +113,7 @@ public class ItemTrackerPanel extends PluginPanel
 	private final Runnable onClearAll;
 
 	private final CardLayout cardLayout = new CardLayout();
-	// CardLayout sizes to the largest card, which would make the (shorter) main
-	// view inherit the detail view's height and show a needless scrollbar. Report
-	// only the visible card's preferred size so each view scrolls on its own merit.
+
 	private final JPanel cardsHost = new JPanel(cardLayout)
 	{
 		@Override
@@ -127,13 +141,11 @@ public class ItemTrackerPanel extends PluginPanel
 	private final JLabel detailNameLabel = new JLabel();
 	private final JLabel detailQtyLabel = new JLabel();
 
-	// Item current values section
 	private final JLabel icvHigh = new JLabel();
 	private final JLabel icvLow = new JLabel();
 	private final JLabel icvAvg = new JLabel();
 	private final JLabel icvVolume = new JLabel();
 
-	// Collection current values section
 	private JPanel ccvSection;
 	private final JLabel ccvHigh = new JLabel();
 	private final JLabel ccvLow = new JLabel();
@@ -141,7 +153,6 @@ public class ItemTrackerPanel extends PluginPanel
 	private final JLabel ccvQuantity = new JLabel();
 	private final JLabel ccvProfit = new JLabel();
 
-	// Market info section
 	private final JLabel miBuyLimit = new JLabel();
 	private final JLabel miGeTax = new JLabel();
 	private final JLabel miVolatility = new JLabel();
@@ -149,7 +160,6 @@ public class ItemTrackerPanel extends PluginPanel
 	private PriceRangeBar priceRangeBar;
 	private final JLabel rangePositionLabel = new JLabel();
 
-	// Alch section
 	private final JLabel haValue = new JLabel();
 	private final JLabel haProfit = new JLabel();
 	private final JLabel laValue = new JLabel();
@@ -168,12 +178,11 @@ public class ItemTrackerPanel extends PluginPanel
 	private JPanel acquisitionsSection;
 	private NotificationsTableModel notificationsModel;
 	private JTable notificationsTable;
-	/** True while a notifications cell editor is open; read off-EDT by the plugin. */
+
 	private volatile boolean editingNotifications;
 	private JPanel notificationsSection;
 	private static final int DEFAULT_NOTIFICATION_ROWS = 5;
-	// Collection-log pop-out: a second table sharing the same item data, plus the
-	// header button that opens it (shown only while the table is scrollable).
+
 	private JButton acqPopoutButton;
 	private AcquisitionsTableModel acqPopoutModel;
 	private JTable acqPopoutTable;
@@ -182,7 +191,6 @@ public class ItemTrackerPanel extends PluginPanel
 	private PriceGraphPanel priceGraph;
 	private PriceGraphPanel volumeGraph;
 
-	// Detail-view section wrappers, host, and applied-layout/row caches.
 	private JPanel topStack;
 	private JPanel detailSectionsHost;
 	private JPanel itemValuesSection;
@@ -221,8 +229,7 @@ public class ItemTrackerPanel extends PluginPanel
 					new EmptyBorder(10, 0, 12, 0));
 	private static final javax.swing.border.Border TITLE_BORDER_NO_DIVIDER =
 			new EmptyBorder(10, 0, 12, 0);
-	// Vertical padding for the GE Estimates value rows: roomier by default,
-	// tightened to the tracked-items list spacing when Compact is selected.
+
 	private static final javax.swing.border.Border ESTIMATE_ROW_BORDER_DEFAULT =
 			new EmptyBorder(3, 0, 3, 0);
 	private static final javax.swing.border.Border ESTIMATE_ROW_BORDER_COMPACT =
@@ -247,9 +254,9 @@ public class ItemTrackerPanel extends PluginPanel
 	private final JPanel totalLowRow;
 	private final JPanel totalAvgRow;
 	private final JLabel lastRefreshLabel;
-	/** Pinned footer (below the scroll area) holding the price-refresh counter; main view only. */
+
 	private final JPanel footerPanel = new JPanel(new BorderLayout());
-	/** Footer "Clear" button; disabled when the list is empty. */
+
 	private final JButton clearButton = new JButton("Clear");
 
 	private volatile Instant lastPriceRefresh = null;
@@ -280,6 +287,7 @@ public class ItemTrackerPanel extends PluginPanel
 	private final JLabel profitLabel;
 	private final JPanel profitSection;
 
+	/** One in-flight price-change pulse: the label being animated, its base color, and the animation start time. */
 	private static final class PulseEntry
 	{
 		final JLabel label;
@@ -294,6 +302,19 @@ public class ItemTrackerPanel extends PluginPanel
 		}
 	}
 
+	/**
+	 * Builds the panel and its two cards (main list and detail view).
+	 *
+	 * @param itemManager           for item names, icons, and prices
+	 * @param config                the plugin configuration
+	 * @param onAddItem             callback to start tracking an item in a mode
+	 * @param onRemoveItem          callback to stop tracking an item
+	 * @param onAcquisitionsEdited  callback after the acquisitions log is edited
+	 * @param onRequestDetailData   callback to request full history/metadata for an item
+	 * @param onClearAcquisitions   callback to clear an item's acquisitions
+	 * @param onNotificationsEdited callback after notification rules are edited
+	 * @param onClearAll            callback to clear all tracked items
+	 */
 	public ItemTrackerPanel(
 			ItemManager itemManager,
 			ItemTrackerConfig config,
@@ -478,13 +499,8 @@ public class ItemTrackerPanel extends PluginPanel
 		cardsHost.add(loggedOutCard, CARD_LOGGED_OUT);
 		add(cardsHost, BorderLayout.CENTER);
 
-		// Default to the logged-out placeholder until the first refresh; the plugin
-		// flips this based on game state (see rebuild).
 		cardLayout.show(cardsHost, CARD_LOGGED_OUT);
 
-		// Pin the refresh counter to a footer below the scroll area (via the
-		// PluginPanel wrapper) so it stays visible no matter how far the main
-		// view is scrolled. Hidden on the detail card (see showMain/showDetail).
 		footerPanel.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		footerPanel.setBorder(BorderFactory.createCompoundBorder(
 				new MatteBorder(1, 0, 0, 0, DIVIDER_COLOR),
@@ -501,7 +517,6 @@ public class ItemTrackerPanel extends PluginPanel
 		clearButton.addActionListener(e -> confirmAndClearAll());
 		footerPanel.add(clearButton, BorderLayout.EAST);
 
-		// Hidden initially to match the logged-out placeholder shown on startup.
 		footerPanel.setVisible(false);
 		getWrappedPanel().add(footerPanel, BorderLayout.SOUTH);
 
@@ -515,6 +530,7 @@ public class ItemTrackerPanel extends PluginPanel
 		pulseTimer.start();
 	}
 
+	/** Moves the GE estimates block above or below the other sections per the configured position. */
 	private void applyEstimatesPosition(EstimatesPosition position)
 	{
 		if (position == currentEstimatesPosition && bottomPanel.getParent() != null)
@@ -541,10 +557,7 @@ public class ItemTrackerPanel extends PluginPanel
 		geEstimatesSlotBottom.repaint();
 	}
 
-	/**
-	 * Sets the vertical spacing of the GE Estimates value rows (High/Low/Avg and
-	 * Est. Profit). Compact tightens them to the tracked-items list spacing.
-	 */
+	/** Applies normal or compact row padding to the GE estimates block per the configured spacing. */
 	private void applyEstimatesSpacing(EstimatesSpacing spacing)
 	{
 		boolean compact = spacing == EstimatesSpacing.COMPACT;
@@ -571,6 +584,7 @@ public class ItemTrackerPanel extends PluginPanel
 		return strip;
 	}
 
+	/** Stops the animation timers so the panel can be disposed cleanly. */
 	public void shutdown()
 	{
 		refreshAgeTimer.stop();
@@ -657,6 +671,7 @@ public class ItemTrackerPanel extends PluginPanel
 		startPulse(label, delta);
 	}
 
+	/** Begins a color pulse on a label (green up / red down) reflecting the sign of a price change. */
 	private void startPulse(JLabel label, int delta)
 	{
 		label.setText(delta > 0 ? "▲" : delta < 0 ? "▼" : "–");
@@ -665,6 +680,7 @@ public class ItemTrackerPanel extends PluginPanel
 		pulseEntries.add(new PulseEntry(label, base, System.currentTimeMillis()));
 	}
 
+	/** Timer tick that advances every active pulse's color toward its base, retiring finished ones. */
 	private void updatePulses()
 	{
 		if (pulseEntries.isEmpty())
@@ -706,6 +722,7 @@ public class ItemTrackerPanel extends PluginPanel
 			label.setForeground(glow);
 	}
 
+	/** Updates the footer's "updated N ago" text from the last price-refresh timestamp. */
 	private void updateRefreshLabel()
 	{
 		if (lastPriceRefresh == null)
@@ -719,6 +736,7 @@ public class ItemTrackerPanel extends PluginPanel
 		}
 	}
 
+	/** Filters the add-item search dropdown to items matching the typed query. */
 	private void onSearch(String query)
 	{
 		if (query == null || query.trim().length() < 2)
@@ -750,6 +768,7 @@ public class ItemTrackerPanel extends PluginPanel
 		searchResultsPanel.repaint();
 	}
 
+	/** Builds one clickable row in the search-results dropdown that adds the item when clicked. */
 	private JPanel buildSearchResultRow(int itemId, String itemName)
 	{
 		JPanel row = new JPanel(new BorderLayout());
@@ -812,6 +831,14 @@ public class ItemTrackerPanel extends PluginPanel
 		return row;
 	}
 
+	/**
+	 * Rebuilds the main item list from the latest tracked items and totals.
+	 *
+	 * <p>This is the primary entry point the plugin calls after any data change:
+	 * it repopulates the rows, updates the value/profit totals and the refresh
+	 * timestamp, and (when {@code indicatorMode} permits) starts pulse animations
+	 * for items whose price moved.
+	 */
 	public void rebuild(List<TrackedItem> items, Instant newLastPriceRefresh,
 			PriceIndicatorMode indicatorMode, boolean loggedIn)
 	{
@@ -828,8 +855,7 @@ public class ItemTrackerPanel extends PluginPanel
 
 		if (!loggedIn)
 		{
-			// Hide everything behind the placeholder and reset to the main view so
-			// re-logging in lands on the list rather than a stale detail view.
+
 			SwingUtilities.invokeLater(() ->
 			{
 				detailItemId = -1;
@@ -847,16 +873,13 @@ public class ItemTrackerPanel extends PluginPanel
 				SwingUtilities.invokeLater(() -> populateDetail(detail));
 			else if (!currentItems.isEmpty())
 			{
-				// The item is genuinely gone (e.g. it was untracked), so leave the
-				// detail view. An empty list is a transient loading/refresh state and
-				// must not bounce us back to the main view.
+
 				SwingUtilities.invokeLater(this::showMain);
 			}
 		}
 		else
 		{
-			// On the main view: make sure we're showing it (e.g. returning from the
-			// logged-out placeholder) with the footer visible.
+
 			SwingUtilities.invokeLater(() ->
 			{
 				footerPanel.setVisible(true);
@@ -980,6 +1003,11 @@ public class ItemTrackerPanel extends PluginPanel
 		});
 	}
 
+	/**
+	 * Builds one row of the main list for a tracked item: icon, name, quantity,
+	 * the configured data rows (prices/value/volume/profit), hover affordances,
+	 * and a click handler that opens the item's detail view.
+	 */
 	private JPanel buildTrackedItemRow(TrackedItem item, PriceIndicatorMode indicatorMode)
 	{
 		final PriceIndicatorMode itemIndicatorMode = item.isHasDeltas() ? indicatorMode : PriceIndicatorMode.OFF;
@@ -1138,8 +1166,6 @@ public class ItemTrackerPanel extends PluginPanel
 				c.anchor = GridBagConstraints.WEST;
 				pricesPanel.add(windowLbl, c);
 
-				// Pack visible columns to the left; fill remaining slots with
-				// placeholders so each visible column keeps its share of width.
 				List<JLabel> visibleCells = new ArrayList<>(4);
 				if (showColHigh)
 				{
@@ -1193,7 +1219,6 @@ public class ItemTrackerPanel extends PluginPanel
 					pricesPanel.add(cell, c);
 				}
 
-				// Inline delta pulse, packed left with the visible columns.
 				JLabel pulse = createDeltaLabel();
 				if (itemIndicatorMode != PriceIndicatorMode.OFF)
 					pulseIfShown(pulse, item.getAvgDelta(), itemIndicatorMode);
@@ -1203,7 +1228,6 @@ public class ItemTrackerPanel extends PluginPanel
 				c.anchor = GridBagConstraints.WEST;
 				pricesPanel.add(pulse, c);
 
-				// Trailing placeholders so visible columns keep their widths.
 				for (int i = visibleCells.size(); i < 4; i++)
 				{
 					c.gridx = col++;
@@ -1297,6 +1321,7 @@ public class ItemTrackerPanel extends PluginPanel
 		return card;
 	}
 
+	/** Attaches a mouse listener to a component and all its descendants, so a whole row reacts as one. */
 	private void addListenerRecursively(Component c, MouseListener listener)
 	{
 		c.addMouseListener(listener);
@@ -1317,7 +1342,7 @@ public class ItemTrackerPanel extends PluginPanel
 		installShortValue(label, value, prefix + GpFormat.shortValue(value), tooltipLabel, tint);
 	}
 
-	/** Installs a pre-formatted compact value with full-number tooltip and hover tint. */
+	/** Installs a pre-formatted compact value on a label with a full-number tooltip and a hover tint. */
 	private void installShortValue(JLabel label, long value, String shortText, String tooltipLabel, Color tint)
 	{
 		label.setText(shortText);
@@ -1346,6 +1371,10 @@ public class ItemTrackerPanel extends PluginPanel
 		return String.format("#%02x%02x%02x", c.getRed(), c.getGreen(), c.getBlue());
 	}
 
+	/**
+	 * Mouse listener that swaps a value label to a tinted background (and the full
+	 * comma-grouped number) while hovered, restoring the compact text on exit.
+	 */
 	private static final class HoverTintListener extends MouseAdapter
 	{
 		private final JLabel label;
@@ -1407,11 +1436,17 @@ public class ItemTrackerPanel extends PluginPanel
 			label.setToolTipText(null);
 	}
 
+	/** Formats a totals value as either full or abbreviated gp per the configured {@link ValueFormat}. */
 	private static String formatTotalGp(long value, ValueFormat fmt)
 	{
 		return fmt == ValueFormat.FULL ? GpFormat.fullGp(value) : GpFormat.shortGp(value);
 	}
 
+	/**
+	 * Constructs the detail-view card once: the header, the scrollable body, and
+	 * every detail section (current values, market info, charts, overview grid,
+	 * alch, notifications, acquisitions log). Sections are populated later per item.
+	 */
 	private void buildDetailCard()
 	{
 		detailCard.setBackground(ColorScheme.DARK_GRAY_COLOR);
@@ -1446,7 +1481,6 @@ public class ItemTrackerPanel extends PluginPanel
 		detailQtyLabel.setForeground(Color.WHITE);
 		detailQtyLabel.setFont(FontManager.getRunescapeSmallFont());
 
-		// Title: icon on the left, name over Qty stacked to its right.
 		JPanel titleTextStack = new JPanel();
 		titleTextStack.setLayout(new BoxLayout(titleTextStack, BoxLayout.Y_AXIS));
 		titleTextStack.setBackground(ColorScheme.DARK_GRAY_COLOR);
@@ -1476,8 +1510,6 @@ public class ItemTrackerPanel extends PluginPanel
 		topStack.add(headerRow);
 		topStack.add(titleRow);
 
-		// Each detail section is its own self-contained wrapper so the layout can
-		// reorder or hide them per config. detailSectionsHost holds them in order.
 		detailSectionsHost = new JPanel();
 		detailSectionsHost.setLayout(new BoxLayout(detailSectionsHost, BoxLayout.Y_AXIS));
 		detailSectionsHost.setBackground(ColorScheme.DARK_GRAY_COLOR);
@@ -1547,7 +1579,7 @@ public class ItemTrackerPanel extends PluginPanel
 					return null;
 
 				long v = ((Number) val).longValue();
-				// Only the short-form (overflowing) cells carry a full-value tooltip.
+
 				if (Math.abs(v) < (col == 3 ? 1000 : 10000))
 					return null;
 
@@ -1682,7 +1714,6 @@ public class ItemTrackerPanel extends PluginPanel
 
 			if (acquisitionsTable.isEditing())
 
-
 				acquisitionsTable.getCellEditor().stopCellEditing();
 
 			int[] selected = acquisitionsTable.getSelectedRows();
@@ -1763,14 +1794,12 @@ public class ItemTrackerPanel extends PluginPanel
 
 			if (acquisitionsTable.isEditing())
 
-
 				acquisitionsTable.getCellEditor().cancelCellEditing();
 
 			if (onClearAcquisitions != null)
 				onClearAcquisitions.accept(detailItemId);
 		});
 
-		// Give all four buttons a uniform height (the broom's icon otherwise makes it taller).
 		JButton[] logButtons = {addRowBtn, removeRowBtn, cleanBtn, clearBtn};
 		int btnHeight = 0;
 		for (JButton b : logButtons)
@@ -1787,7 +1816,6 @@ public class ItemTrackerPanel extends PluginPanel
 		tableButtons.add(cleanBtn);
 		tableButtons.add(clearBtn);
 
-		// Title with a pop-out button that only appears while the table is scrollable.
 		acqPopoutButton = buildPopoutButton(this::openCollectionLogPopout);
 		acqPopoutButton.setVisible(false);
 		JComponent logTitle = buildDetailSectionTitleRow("Item Collection Log", acqPopoutButton);
@@ -1815,18 +1843,11 @@ public class ItemTrackerPanel extends PluginPanel
 
 		buildNotificationsSection();
 
-		// Populate the overview rows and order/visibility from config now that
-		// every section wrapper exists.
 		rebuildOverviewGrid();
 		applyDetailSectionLayout();
 	}
 
-	/**
-	 * Builds the per-item Notifications section: a collection-log-style table of
-	 * rules (Metric / Time Frame / Operation / Value) with combo-box editors,
-	 * add/remove/clear buttons, and a gear in the header linking to the shared
-	 * notification settings.
-	 */
+	/** Builds the notifications section: the rules table and its add/remove/edit controls. */
 	private void buildNotificationsSection()
 	{
 		notificationsModel = new NotificationsTableModel();
@@ -1848,12 +1869,9 @@ public class ItemTrackerPanel extends PluginPanel
 		notificationsTable.getTableHeader().setFont(FontManager.getRunescapeSmallFont());
 		notificationsTable.getTableHeader().setReorderingAllowed(false);
 		notificationsTable.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
-		// Commit an open cell editor as soon as the table loses focus (e.g. clicking
-		// back into the game). Otherwise the editor lingers open, and the guard below
-		// would block all notifications for as long as the detail view is shown.
+
 		notificationsTable.putClientProperty("terminateEditOnFocusLost", Boolean.TRUE);
-		// Track when a cell editor is open so the plugin can hold off firing (and
-		// removing) notifications mid-edit, which would otherwise wedge the editor.
+
 		notificationsTable.addPropertyChangeListener("tableCellEditor",
 				e -> editingNotifications = notificationsTable.isEditing());
 		applyNotificationRenderers();
@@ -1885,7 +1903,6 @@ public class ItemTrackerPanel extends PluginPanel
 
 			if (notificationsTable.isEditing())
 
-
 				notificationsTable.getCellEditor().stopCellEditing();
 
 			int[] selected = notificationsTable.getSelectedRows();
@@ -1901,8 +1918,6 @@ public class ItemTrackerPanel extends PluginPanel
 					rules.remove(idx);
 			}
 
-			// Keep at least the blank default rows so the section never collapses
-			// below its ready-to-fill layout.
 			while (rules.size() < DEFAULT_NOTIFICATION_ROWS)
 				rules.add(new NotificationRule());
 
@@ -1939,8 +1954,7 @@ public class ItemTrackerPanel extends PluginPanel
 				return;
 
 			t.getNotifications().clear();
-			// Reset straight back to blank default rows instead of leaving the
-			// section collapsed and empty until the next refresh re-seeds it.
+
 			for (int i = 0; i < DEFAULT_NOTIFICATION_ROWS; i++)
 				t.getNotifications().add(new NotificationRule());
 
@@ -1974,17 +1988,13 @@ public class ItemTrackerPanel extends PluginPanel
 		btn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 	}
 
+	/** Notifies the plugin (via callback) that the current item's notification rules changed, so it can persist them. */
 	private void notifyNotificationsEdited()
 	{
 		if (onNotificationsEdited != null && detailItemId > 0)
 			onNotificationsEdited.accept(detailItemId);
 	}
 
-	/**
-	 * Wraps a detail-view section title and its content in a self-contained,
-	 * vertically stacked panel so {@link #applyDetailSectionLayout()} can reorder
-	 * or hide it as a unit (title divider included).
-	 */
 	private JPanel buildDetailSection(String title, Component... contents)
 	{
 		JPanel wrapper = newSectionWrapper();
@@ -1995,7 +2005,6 @@ public class ItemTrackerPanel extends PluginPanel
 		return wrapper;
 	}
 
-	/** Like {@link #buildDetailSection} but with a pop-out button in the header. */
 	private JPanel buildDetailSectionWithPopout(String title, Runnable onPopout, Component... contents)
 	{
 		JPanel wrapper = newSectionWrapper();
@@ -2015,7 +2024,6 @@ public class ItemTrackerPanel extends PluginPanel
 		return wrapper;
 	}
 
-	/** Section header with a centred title and a pop-out button on the right. */
 	private JComponent buildDetailSectionTitleRow(String title, Runnable onPopout)
 	{
 		return buildDetailSectionTitleRow(title, buildPopoutButton(onPopout));
@@ -2033,7 +2041,7 @@ public class ItemTrackerPanel extends PluginPanel
 		};
 		row.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		row.setAlignmentX(Component.LEFT_ALIGNMENT);
-		// Top divider spanning the full width, matching buildDetailSectionTitle.
+
 		row.setBorder(BorderFactory.createCompoundBorder(
 				BorderFactory.createCompoundBorder(
 						new EmptyBorder(10, 0, 0, 0),
@@ -2044,18 +2052,13 @@ public class ItemTrackerPanel extends PluginPanel
 		label.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 		label.setFont(FontManager.getRunescapeBoldFont());
 
-		// Equal-width strut on the left keeps the title visually centred.
 		row.add(Box.createHorizontalStrut(popBtn.getPreferredSize().width), BorderLayout.WEST);
 		row.add(label, BorderLayout.CENTER);
 		row.add(popBtn, BorderLayout.EAST);
 		return row;
 	}
 
-	/**
-	 * Re-adds the detail sections to the host in the order configured by the
-	 * "Show {Section}" dropdowns, skipping any set to None. Cheap to call on every
-	 * refresh: a signature check skips the rebuild when nothing changed.
-	 */
+	/** Reorders and shows/hides the detail sections to match the configured slot assignments. */
 	private void applyDetailSectionLayout()
 	{
 		if (detailSectionsHost == null)
@@ -2102,11 +2105,7 @@ public class ItemTrackerPanel extends PluginPanel
 		detailSectionsHost.repaint();
 	}
 
-	/**
-	 * Rebuilds the Price Overview grid to contain only the rows selected in
-	 * config. Skipped when the selection is unchanged. The populate pass keys off
-	 * {@link #overviewLabels}, so omitted rows are simply never filled.
-	 */
+	/** Rebuilds the price overview grid to match the configured preset of time-window rows. */
 	private void rebuildOverviewGrid()
 	{
 		if (overviewGrid == null)
@@ -2120,24 +2119,26 @@ public class ItemTrackerPanel extends PluginPanel
 		populateOverviewGrid(desired);
 	}
 
+	/** @return the item id whose detail view is open, or a non-positive value when on the main list. */
 	public int getDetailItemId()
 	{
 		return detailItemId;
 	}
 
-	/** True while the user has a notifications cell editor open. Thread-safe. */
+	/** @return whether the user is mid-edit in the notifications table, so the plugin should defer firing rules. */
 	public boolean isEditingNotifications()
 	{
 		return editingNotifications;
 	}
 
+	/** Supplies the latest nature/fire rune prices used to compute high-alch profit in the detail view. */
 	public void setAlchRunePrices(long naturePrice, long firePrice)
 	{
 		this.natureRunePrice = naturePrice;
 		this.fireRunePrice = firePrice;
 	}
 
-	/** Re-runs detail population when the given item is the one on screen. */
+	/** Re-populates the open detail view with fresh data for {@code itemId} (no-op if a different item is shown). */
 	public void refreshDetailData(int itemId)
 	{
 		if (detailItemId != itemId)
@@ -2160,11 +2161,6 @@ public class ItemTrackerPanel extends PluginPanel
 		});
 	}
 
-	/**
-	 * Builds a GE-Estimates-styled block of stacked "Label: value" rows.
-	 * The fourth row is grey (volume / quantity); when {@code profit} is
-	 * supplied it is appended below a divider, matching the GE Estimates view.
-	 */
 	private JPanel buildCurrentValuesBlock(JLabel high, JLabel low, JLabel avg, JLabel fourth, JLabel profit)
 	{
 		JPanel block = new JPanel()
@@ -2217,11 +2213,6 @@ public class ItemTrackerPanel extends PluginPanel
 		return overviewGrid;
 	}
 
-	/**
-	 * Creates an empty Price Overview grid whose row/column separators are
-	 * painted from the supplied label maps. Shared by the sidebar grid and the
-	 * larger pop-out copy so both render identically from their own labels.
-	 */
 	private JPanel createOverviewGrid(Map<TimeWindow, JLabel[]> labels, List<JLabel> windowLabels, int sepGap)
 	{
 		JPanel grid = new JPanel(new GridBagLayout())
@@ -2240,7 +2231,6 @@ public class ItemTrackerPanel extends PluginPanel
 				if (firstRow == null || firstRow[0] == null)
 					return;
 
-				// Vertical separator sepGap px to the right of the label column.
 				int vx = firstRow[0].getX() - 3;
 				if (!windowLabels.isEmpty())
 				{
@@ -2251,7 +2241,6 @@ public class ItemTrackerPanel extends PluginPanel
 				g.setColor(DIVIDER_COLOR);
 				g.drawLine(vx, 4, vx, getHeight() - 4);
 
-				// Fainter horizontal separators between each data row.
 				g.setColor(OVERVIEW_ROW_DIVIDER);
 				JLabel prev = null;
 				for (TimeWindow w : OVERVIEW_WINDOWS)
@@ -2277,22 +2266,14 @@ public class ItemTrackerPanel extends PluginPanel
 		return grid;
 	}
 
-	/**
-	 * (Re)builds the Price Overview grid contents, including only the time-window
-	 * rows in {@code rows}. The header row is always present.
-	 */
+	/** (Re)creates the overview grid panels (sidebar and pop-out) for the given set of time-window rows. */
 	private void populateOverviewGrid(Set<TimeWindow> rows)
 	{
 		fillOverviewGrid(overviewGrid, overviewLabels, overviewWindowLabels, rows,
 				FontManager.getRunescapeSmallFont(), false);
 	}
 
-	/**
-	 * (Re)builds a Price Overview grid's contents into the given label maps,
-	 * including only the rows in {@code rows} and using {@code font} for every
-	 * cell. The {@code expanded} pop-out gets a larger font, spelled-out
-	 * time-window labels ("5 Minute", "1 Hour", …) and roomier padding.
-	 */
+	/** Lays out the overview grid's header and one row of price/volume labels per selected time window. */
 	private void fillOverviewGrid(JPanel grid, Map<TimeWindow, JLabel[]> labels,
 			List<JLabel> windowLabels, Set<TimeWindow> rows, Font font, boolean expanded)
 	{
@@ -2300,14 +2281,12 @@ public class ItemTrackerPanel extends PluginPanel
 		labels.clear();
 		windowLabels.clear();
 
-		// Roomier spacing for the pop-out; tight for the narrow sidebar.
 		int vPad = expanded ? 7 : 2;
 		int hPad = expanded ? 9 : 1;
-		int hPadSep = expanded ? 16 : 3; // larger gap on the column beside the separator
+		int hPadSep = expanded ? 16 : 3;
 		grid.setBorder(new EmptyBorder(expanded ? 10 : 6, expanded ? 14 : 3,
 				expanded ? 10 : 2, expanded ? 14 : 3));
 
-		// Right-align numeric columns in the pop-out so digits line up by place value.
 		int colAlign = expanded ? SwingConstants.RIGHT : SwingConstants.CENTER;
 
 		GridBagConstraints c = new GridBagConstraints();
@@ -2325,12 +2304,11 @@ public class ItemTrackerPanel extends PluginPanel
 			c.gridx = i;
 			c.gridy = 0;
 			c.weightx = i == 0 ? 0 : 1;
-			// Extra left inset on the High column leaves a gap from the separator.
+
 			c.insets = new Insets(vPad, i == 1 ? hPadSep : hPad, vPad, hPad);
 			grid.add(h, c);
 		}
 
-		// 1px divider spanning the full width beneath the header row.
 		JPanel headerDivider = new JPanel();
 		headerDivider.setBackground(DIVIDER_COLOR);
 		headerDivider.setPreferredSize(new Dimension(0, 1));
@@ -2385,17 +2363,12 @@ public class ItemTrackerPanel extends PluginPanel
 		grid.repaint();
 	}
 
-	/** Spelled-out time-window label for the pop-out's leftmost column. */
 	private static String fullWindowLabel(TimeWindow w)
 	{
 		return w.getLongLabel();
 	}
 
-	/**
-	 * Fills a Price Overview grid's value cells from the given item's stats.
-	 * When {@code full} is set (the pop-out view), prices show as full
-	 * comma-grouped numbers instead of the abbreviated sidebar form.
-	 */
+	/** Fills the overview grid's cells with an item's per-window high/low/avg/volume/Δ% values. */
 	private void populateOverviewLabels(Map<TimeWindow, JLabel[]> labels, TrackedItem item, boolean full)
 	{
 		for (TimeWindow w : OVERVIEW_WINDOWS)
@@ -2404,10 +2377,9 @@ public class ItemTrackerPanel extends PluginPanel
 			if (cells == null)
 				continue;
 
-
 			if (w == TimeWindow.LIVE)
 			{
-				// First row shows the latest 5-minute bucket rather than live prices.
+
 				List<WikiRealtimePriceClient.PricePoint> s5 = item.getSeries5m();
 				WikiRealtimePriceClient.PricePoint last = s5.isEmpty() ? null : s5.get(s5.size() - 1);
 				long high = last == null ? 0 : last.getAvgHighPrice();
@@ -2416,7 +2388,7 @@ public class ItemTrackerPanel extends PluginPanel
 				setPriceCell(cells[0], high, COLOR_HIGH, "High", TINT_HIGH, full);
 				setPriceCell(cells[1], low, COLOR_LOW, "Low", TINT_LOW, full);
 				setPriceCell(cells[2], avg, COLOR_AVG, "Avg", TINT_AVG, full);
-				setOverviewPlaceholder(cells[3]); // Δ% not meaningful for the 5m row
+				setOverviewPlaceholder(cells[3]);
 				if (last == null)
 					setOverviewPlaceholder(cells[4]);
 				else
@@ -2431,7 +2403,6 @@ public class ItemTrackerPanel extends PluginPanel
 			setPriceCell(cells[2], s == null ? 0 : s.getAvg(), COLOR_AVG, "Avg", TINT_AVG, full);
 			applyDeltaPct(cells[3], item, w);
 
-			// Vol shows the real count, including 0 when nothing traded in the window.
 			if (s == null)
 				setOverviewPlaceholder(cells[4]);
 			else
@@ -2439,9 +2410,7 @@ public class ItemTrackerPanel extends PluginPanel
 		}
 	}
 
-	// ---- Pop-out windows ----
-
-	/** A detached section window plus the callback that refreshes it from an item. */
+	/** Tracks one open pop-out window and the refresher used to push fresh item data into it. */
 	private static final class PopoutHandle
 	{
 		final JFrame frame;
@@ -2458,21 +2427,18 @@ public class ItemTrackerPanel extends PluginPanel
 
 	private final List<PopoutHandle> openPopouts = new ArrayList<>();
 
-	// Shared "smooth lines" preference for the price graph, remembered as the
-	// sidebar and pop-out graphs open and close. pricePopoutGraph tracks the open
-	// price pop-out (if any) so a sidebar toggle can sync it live.
 	private boolean graphSmooth = true;
 	private PriceGraphPanel.LineSet graphLineSet = PriceGraphPanel.LineSet.ALL;
 	private PriceGraphPanel pricePopoutGraph;
 
-	/** Pushes the on-screen detail item into every open pop-out window. */
+	/** Pushes fresh data for {@code item} into every open pop-out window. */
 	private void refreshPopouts(TrackedItem item)
 	{
 		for (PopoutHandle h : new ArrayList<>(openPopouts))
 			h.refresher.accept(item);
 	}
 
-	/** Closes every pop-out, e.g. when leaving the detail view. */
+	/** Disposes all open pop-out windows (e.g. when leaving the detail view). */
 	private void closePopouts()
 	{
 		for (PopoutHandle h : new ArrayList<>(openPopouts))
@@ -2482,9 +2448,8 @@ public class ItemTrackerPanel extends PluginPanel
 	}
 
 	/**
-	 * Opens {@code content} in a resizable window, seeds it from the current
-	 * detail item, and keeps it updated until it (or the detail view) closes.
-	 * {@code onClose} runs when the window is disposed.
+	 * Opens a non-modal pop-out window hosting {@code content}, registering its
+	 * refresher so live updates reach it and running {@code onClose} when dismissed.
 	 */
 	private void showPopout(String title, JComponent content, Consumer<TrackedItem> refresher, Runnable onClose)
 	{
@@ -2497,8 +2462,6 @@ public class ItemTrackerPanel extends PluginPanel
 		frame.setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
 		frame.setContentPane(holder);
 
-		// Seed the content before packing so the window fits the real cell widths
-		// (full numbers) and the content's height exactly — no trailing whitespace.
 		TrackedItem current = currentItems.get(detailItemId);
 		if (current != null)
 			refresher.accept(current);
@@ -2522,7 +2485,7 @@ public class ItemTrackerPanel extends PluginPanel
 		frame.setVisible(true);
 	}
 
-	/** Opens a larger, live copy of a price/volume graph on its current timeframe. */
+	/** Opens an expanded chart pop-out mirroring (and kept in sync with) the in-panel graph. */
 	private void openGraphPopout(String title, PriceGraphPanel.Mode mode, PriceGraphPanel source)
 	{
 		PriceGraphPanel graph = new PriceGraphPanel(mode, true);
@@ -2532,8 +2495,7 @@ public class ItemTrackerPanel extends PluginPanel
 		Runnable onClose = null;
 		if (mode == PriceGraphPanel.Mode.PRICE)
 		{
-			// Carry the remembered smoothing and line-set state in, and keep the
-			// sidebar graph (and shared preferences) in sync when toggled here.
+
 			graph.setSmooth(graphSmooth);
 			graph.setSmoothListener(b -> {
 				graphSmooth = b;
@@ -2556,20 +2518,17 @@ public class ItemTrackerPanel extends PluginPanel
 		showPopout(title, graph, refresher, onClose);
 	}
 
-	/** Opens a larger, live copy of the Price Overview table. */
+	/** Opens the price overview grid in a standalone pop-out window. */
 	private void openOverviewPopout()
 	{
 		Map<TimeWindow, JLabel[]> labels = new EnumMap<>(TimeWindow.class);
 		List<JLabel> windowLabels = new ArrayList<>();
 		JPanel grid = createOverviewGrid(labels, windowLabels, 12);
-		// The pixel RuneScape fonts get jagged when enlarged, so the pop-out uses a
-		// smooth monospaced font: legible at this size and aligns digits in columns.
+
 		Font big = new Font(Font.MONOSPACED, Font.PLAIN, 18);
-		// The pop-out always shows every window, regardless of the sidebar preset,
-		// with the time-window column spelled out in full.
+
 		fillOverviewGrid(grid, labels, windowLabels, OverviewPreset.DETAILED.getWindows(), big, true);
 
-		// Pin the grid to the top so it grows by row height, not by stretching cells.
 		JPanel top = new JPanel(new BorderLayout());
 		top.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 		top.add(grid, BorderLayout.NORTH);
@@ -2581,7 +2540,6 @@ public class ItemTrackerPanel extends PluginPanel
 		showPopout("Price Overview", scroll, refresher, null);
 	}
 
-	/** Shows the title pop-out button whenever the log is docked (not popped out). */
 	private void updateAcqPopoutButton()
 	{
 		if (acqPopoutButton == null)
@@ -2590,12 +2548,7 @@ public class ItemTrackerPanel extends PluginPanel
 		acqPopoutButton.setVisible(acqPopoutModel == null);
 	}
 
-	/**
-	 * Opens a larger Collection Log in its own window: a second table sharing the
-	 * same item data, with full-format numbers, spelled-out headers, and the same
-	 * Add/Remove/Clean/Clear actions. Edits route through onAcquisitionsEdited, so
-	 * the docked and popped-out tables stay in sync.
-	 */
+	/** Opens the editable acquisitions (collection log) table in a standalone pop-out window. */
 	private void openCollectionLogPopout()
 	{
 		if (acqPopoutModel != null)
@@ -2615,7 +2568,6 @@ public class ItemTrackerPanel extends PluginPanel
 		model.setItem(currentItems.get(detailItemId));
 		applyAcqRenderers(table, model, true);
 
-		// Double-click below the rows adds a new row, matching the docked table.
 		table.addMouseListener(new MouseAdapter()
 		{
 			@Override
@@ -2708,8 +2660,7 @@ public class ItemTrackerPanel extends PluginPanel
 		return b;
 	}
 
-	// ---- Shared collection-log mutations (used by the pop-out table) ----
-
+	/** Appends a new empty acquisition row to the table and scrolls it into view. */
 	private void acqAddRow(JTable table, AcquisitionsTableModel model)
 	{
 		TrackedItem t = currentItems.get(detailItemId);
@@ -2741,6 +2692,7 @@ public class ItemTrackerPanel extends PluginPanel
 		}
 	}
 
+	/** Removes the selected acquisition rows and commits the change. */
 	private void acqRemoveSelected(JTable table, AcquisitionsTableModel model)
 	{
 		TrackedItem t = currentItems.get(detailItemId);
@@ -2748,7 +2700,6 @@ public class ItemTrackerPanel extends PluginPanel
 			return;
 
 		if (table.isEditing())
-
 
 			table.getCellEditor().stopCellEditing();
 
@@ -2769,6 +2720,7 @@ public class ItemTrackerPanel extends PluginPanel
 		onAcquisitionsEdited.accept(detailItemId);
 	}
 
+	/** Consolidates the acquisitions log, merging like rows and dropping empty ones. */
 	private void acqClean(AcquisitionsTableModel model)
 	{
 		TrackedItem t = currentItems.get(detailItemId);
@@ -2782,6 +2734,7 @@ public class ItemTrackerPanel extends PluginPanel
 		}
 	}
 
+	/** Clears all acquisitions for the current item after confirmation, via the plugin callback. */
 	private void acqClear()
 	{
 		TrackedItem t = currentItems.get(detailItemId);
@@ -2799,11 +2752,9 @@ public class ItemTrackerPanel extends PluginPanel
 
 		if (onClearAcquisitions != null)
 
-
 			onClearAcquisitions.accept(detailItemId);
 	}
 
-	/** Small "open in a larger window" icon for a section header. */
 	private Icon buildPopoutIcon()
 	{
 		int s = 11;
@@ -2812,11 +2763,11 @@ public class ItemTrackerPanel extends PluginPanel
 		g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
 		g.setColor(ColorScheme.LIGHT_GRAY_COLOR);
 		g.setStroke(new BasicStroke(1f));
-		// A small window in the lower-left with an arrow pointing out to the upper-right.
+
 		g.drawRect(0, 4, 6, 6);
-		g.drawLine(4, 6, s - 1, 0);   // arrow shaft
-		g.drawLine(s - 5, 0, s - 1, 0); // arrowhead, top edge
-		g.drawLine(s - 1, 0, s - 1, 4); // arrowhead, right edge
+		g.drawLine(4, 6, s - 1, 0);
+		g.drawLine(s - 5, 0, s - 1, 0);
+		g.drawLine(s - 1, 0, s - 1, 4);
 		g.dispose();
 		return new ImageIcon(img);
 	}
@@ -2834,12 +2785,7 @@ public class ItemTrackerPanel extends PluginPanel
 		return btn;
 	}
 
-	/**
-	 * Applies fonts, renderers and combo-box editors to the Notifications table.
-	 * Metric / Time Frame / Operation are fixed dropdowns; the Value column uses a
-	 * per-row editor that switches between a dropdown (categorical metrics) and a
-	 * text field (numeric metrics).
-	 */
+	/** Wires the per-column cell editors/renderers on the notifications table to the current metric's input type. */
 	private void applyNotificationRenderers()
 	{
 		Font f = FontManager.getRunescapeSmallFont();
@@ -2865,6 +2811,7 @@ public class ItemTrackerPanel extends PluginPanel
 			((DefaultTableCellRenderer) hr).setHorizontalAlignment(SwingConstants.CENTER);
 	}
 
+	/** Builds the market-info section (buy limit, GE value, volatility, liquidity, 30-day range, etc.). */
 	private JPanel buildMarketInfoBlock()
 	{
 		JPanel block = new JPanel()
@@ -2889,7 +2836,6 @@ public class ItemTrackerPanel extends PluginPanel
 		block.add(Box.createVerticalStrut(6));
 		block.add(buildMarketInfoPair("Volatility", miVolatility, "Liquidity", miLiquidity));
 
-		// Faint separator above the 30 Day Price Range sub-section.
 		block.add(Box.createVerticalStrut(8));
 		JPanel rangeSep = new JPanel();
 		rangeSep.setBackground(OVERVIEW_ROW_DIVIDER);
@@ -2949,6 +2895,7 @@ public class ItemTrackerPanel extends PluginPanel
 		return grid;
 	}
 
+	/** Builds the alch-info section (high/low alch values and the high-alch profit estimate). */
 	private JPanel buildAlchBlock()
 	{
 		JPanel block = new JPanel()
@@ -3051,6 +2998,7 @@ public class ItemTrackerPanel extends PluginPanel
 		return title;
 	}
 
+	/** Switches to the detail card for an item, requesting its full data and populating the view. */
 	private void showDetail(int itemId)
 	{
 		TrackedItem item = currentItems.get(itemId);
@@ -3065,6 +3013,7 @@ public class ItemTrackerPanel extends PluginPanel
 			onRequestDetailData.accept(itemId);
 	}
 
+	/** Returns to the main item list, closing any open pop-outs. */
 	private void showMain()
 	{
 		detailItemId = -1;
@@ -3073,10 +3022,7 @@ public class ItemTrackerPanel extends PluginPanel
 		cardLayout.show(cardsHost, CARD_MAIN);
 	}
 
-	/**
-	 * Footer Clear action: confirms with the user, then asks the plugin to remove
-	 * every tracked item (along with its notifications and collection log).
-	 */
+	/** Prompts for confirmation, then clears all tracked items via the plugin callback. */
 	private void confirmAndClearAll()
 	{
 		int count = currentItems.size();
@@ -3094,10 +3040,14 @@ public class ItemTrackerPanel extends PluginPanel
 			onClearAll.run();
 	}
 
+	/**
+	 * Fills every detail-view section with the given item's data: name/quantity,
+	 * current values, market info, the charts, the overview grid, alch figures,
+	 * notification rules, and the acquisitions log.
+	 */
 	private void populateDetail(TrackedItem item)
 	{
-		// Apply any config-driven changes to row selection and section order/visibility
-		// before filling in values (both are no-ops when nothing changed).
+
 		rebuildOverviewGrid();
 		applyDetailSectionLayout();
 
@@ -3112,14 +3062,12 @@ public class ItemTrackerPanel extends PluginPanel
 		final boolean hasPrices = item.hasPrices();
 		final ValueFormat full = ValueFormat.FULL;
 
-		// --- Item Current Values ---
 		icvHigh.setText("High: " + (hasPrices ? formatTotalGp(item.getHighPrice(), full) : "—"));
 		icvLow.setText("Low: " + (hasPrices ? formatTotalGp(item.getLowPrice(), full) : "—"));
 		icvAvg.setText("Average: " + (hasPrices ? formatTotalGp(item.getAvgPrice(), full) : "—"));
 		long vol24 = windowVolume(item, TimeWindow.H24);
 		icvVolume.setText("Volume (24h): " + (vol24 > 0 ? NUMBER_FORMAT.format(vol24) : "—"));
 
-		// --- Collection Current Values ---
 		int colQty = item.getRecordQuantitySum();
 		ccvSection.setVisible(colQty > 0);
 		if (colQty > 0)
@@ -3138,17 +3086,14 @@ public class ItemTrackerPanel extends PluginPanel
 					: (estProfit > 0 ? COLOR_HIGH : COLOR_LOW));
 		}
 
-		// --- Price Overview ---
 		populateOverviewLabels(overviewLabels, item, false);
 
-		// --- Graphs ---
 		if (priceGraph != null)
 			priceGraph.setData(item.getSeries5m(), item.getSeries1h(), item.getSeries6h(), item.getSeries24h(), item.getAvgPrice());
 
 		if (volumeGraph != null)
 			volumeGraph.setData(item.getSeries5m(), item.getSeries1h(), item.getSeries6h(), item.getSeries24h(), item.getAvgPrice());
 
-		// --- Market Info ---
 		miBuyLimit.setText(item.getBuyLimit() > 0 ? NUMBER_FORMAT.format(item.getBuyLimit()) : "N/A");
 		long tax = geTax(item.getAvgPrice());
 		miGeTax.setText(hasPrices ? "~" + formatTotalGp(tax, full) : "—");
@@ -3161,7 +3106,6 @@ public class ItemTrackerPanel extends PluginPanel
 			applyRangePosition(range[0], range[1], item.getAvgPrice());
 		}
 
-		// --- Alchemy Info ---
 		long ha = item.getHighAlch();
 		long la = item.getLowAlch();
 		long avg = item.getAvgPrice();
@@ -3189,11 +3133,6 @@ public class ItemTrackerPanel extends PluginPanel
 					+ "<br>= " + signedGp(estProfit) + "</html>");
 		}
 
-		// --- Notifications ---
-		// Whenever the table is empty, seed it with blank default rows, mirroring
-		// the collection log's ready-to-fill layout. This covers both a fresh item
-		// and one whose rules were all removed, so there are always blank lines to
-		// fill in rather than a collapsed, header-only section.
 		if (item.getNotifications().isEmpty())
 		{
 			for (int i = 0; i < DEFAULT_NOTIFICATION_ROWS; i++)
@@ -3203,11 +3142,6 @@ public class ItemTrackerPanel extends PluginPanel
 			notifyNotificationsEdited();
 		}
 
-		// setItem fires a structure change that drops the custom editors/renderers,
-		// so they are re-applied immediately afterwards. Skip this while the user is
-		// actively editing a cell: a periodic price refresh would otherwise yank the
-		// open editor out from under them and leave the table's editing state stuck,
-		// freezing the grid until the next refresh clears it.
 		if (!notificationsTable.isEditing())
 		{
 			notificationsModel.setItem(item);
@@ -3215,7 +3149,6 @@ public class ItemTrackerPanel extends PluginPanel
 			notificationsTable.revalidate();
 		}
 
-		// --- Collection Log ---
 		if (!acquisitionsTable.isEditing())
 		{
 			acquisitionsModel.setItem(item);
@@ -3226,7 +3159,6 @@ public class ItemTrackerPanel extends PluginPanel
 		acquisitionsSection.setVisible(item.getMode() != TrackItemMode.VIEW);
 		updateAcqPopoutButton();
 
-		// Mirror the data into the popped-out collection log, if open.
 		if (acqPopoutModel != null)
 		{
 			acqPopoutModel.setItem(item);
@@ -3234,25 +3166,15 @@ public class ItemTrackerPanel extends PluginPanel
 			acqPopoutTable.revalidate();
 		}
 
-		// Keep any detached section windows in sync with the item on screen.
 		refreshPopouts(item);
 	}
 
-	/**
-	 * Uniform "-" placeholder shared by every empty Price Overview cell. The
-	 * label keeps its existing column colour (green/red/gold for High/Low/Avg,
-	 * grey for Δ%/Vol) so only the dash character is standardised.
-	 */
 	private void setOverviewPlaceholder(JLabel label)
 	{
 		clearItemValue(label, "-");
 	}
 
-	/**
-	 * Sets a High/Low/Avg overview cell: the value in the column colour, or a
-	 * column-coloured "-" placeholder when the value is 0 (no trade of that type).
-	 * {@code full} renders the complete number instead of the abbreviated form.
-	 */
+	/** Sets a price cell's text (full or abbreviated), color, tooltip, and hover tint, or a placeholder if unset. */
 	private void setPriceCell(JLabel label, long value, Color color, String tooltipLabel, Color tint, boolean full)
 	{
 		label.setForeground(color);
@@ -3268,7 +3190,6 @@ public class ItemTrackerPanel extends PluginPanel
 			installShortValue(label, value, GpFormat.shortValue1dp(value), tooltipLabel, tint);
 	}
 
-	/** Removes any hover-to-tint listener so a label can show plain static text. */
 	private static void removeHoverTint(JLabel label)
 	{
 		for (MouseListener ml : label.getMouseListeners())
@@ -3288,12 +3209,14 @@ public class ItemTrackerPanel extends PluginPanel
 		return Math.max(h, l);
 	}
 
+	/** @return the total traded volume for an item over the given window, or 0 if unknown. */
 	private long windowVolume(TrackedItem item, TimeWindow window)
 	{
 		PriceStats s = item.getWindowStats().get(window);
 		return s == null ? 0 : s.getVolume();
 	}
 
+	/** Sets a volume cell's compact/full text with a full-number tooltip and hover tint, or a placeholder. */
 	private void installVolumeValue(JLabel label, long vol, boolean full)
 	{
 		label.setForeground(COLOR_VOLUME);
@@ -3313,10 +3236,7 @@ public class ItemTrackerPanel extends PluginPanel
 		SwingUtilities.invokeLater(listener::applyIfHovered);
 	}
 
-	/**
-	 * Computes the percentage change of the average price over the window's
-	 * timeframe: current average versus the average one full period ago.
-	 */
+	/** Sets a label to the signed percent change of the current price vs. the window average, colored up/down. */
 	private void applyDeltaPct(JLabel label, TrackedItem item, TimeWindow window)
 	{
 		for (MouseListener ml : label.getMouseListeners())
@@ -3369,6 +3289,7 @@ public class ItemTrackerPanel extends PluginPanel
 		return window.getLongLabel().toLowerCase(java.util.Locale.ROOT);
 	}
 
+	/** Sets a profit label to a signed, colored gp figure, or a placeholder when the profit is unknown. */
 	private void applyProfitLabel(JLabel label, long profit, boolean known)
 	{
 		if (!known)
@@ -3388,10 +3309,7 @@ public class ItemTrackerPanel extends PluginPanel
 		return (v > 0 ? "+" : "") + NUMBER_FORMAT.format(v) + " gp";
 	}
 
-	/**
-	 * Builds a breakdown tooltip for an alchemy profit:
-	 * alch value − item avg − nature rune − {fireQty} × fire rune.
-	 */
+	/** Builds the tooltip breaking down an alch-profit figure: alch value minus item cost and rune cost. */
 	private String alchProfitTooltip(String label, long alchValue, long itemAvg, int fireQty)
 	{
 		long natureCost = natureRunePrice;
@@ -3405,6 +3323,7 @@ public class ItemTrackerPanel extends PluginPanel
 				+ "= " + signedGp(profit) + "</html>";
 	}
 
+	/** @return the Grand Exchange sell tax on a unit at {@code avgPrice} (per the live GE tax rules). */
 	private long geTax(long avgPrice)
 	{
 		if (avgPrice < 50)
@@ -3414,6 +3333,7 @@ public class ItemTrackerPanel extends PluginPanel
 		return Math.min(tax, 5_000_000L);
 	}
 
+	/** Sets the market-info volatility rating from the item's week series via {@link MarketClassifier}. */
 	private void applyVolatility(TrackedItem item)
 	{
 		String label = MarketClassifier.volatility(item.getSeriesFor(TimeWindow.WEEK));
@@ -3445,6 +3365,7 @@ public class ItemTrackerPanel extends PluginPanel
 		miVolatility.setToolTipText(tooltip);
 	}
 
+	/** Sets the market-info liquidity rating from the last 24h volume via {@link MarketClassifier}. */
 	private void applyLiquidity(long vol24)
 	{
 		String label = MarketClassifier.liquidity(vol24);
@@ -3462,10 +3383,7 @@ public class ItemTrackerPanel extends PluginPanel
 		miLiquidity.setToolTipText("24h volume: " + NUMBER_FORMAT.format(vol24));
 	}
 
-	/**
-	 * Classifies where the current average sits within the 30-day range and
-	 * shows it as Highest / High / High Avg / Average / Low Avg / Low / Lowest.
-	 */
+	/** Sets the market-info "30-day range position" rating for where the live price sits within its month range. */
 	private void applyRangePosition(long min, long max, long live)
 	{
 		String text = MarketClassifier.rangePosition(min, max, live);
@@ -3496,6 +3414,7 @@ public class ItemTrackerPanel extends PluginPanel
 		rangePositionLabel.setForeground(color);
 	}
 
+	/** @return the {@code [min, max]} price range over the item's last 30 days via {@link MarketClassifier}. */
 	private long[] thirtyDayRange(TrackedItem item)
 	{
 		return MarketClassifier.thirtyDayRange(item.getSeriesFor(TimeWindow.MONTH));
@@ -3508,11 +3427,6 @@ public class ItemTrackerPanel extends PluginPanel
 
 	private static final String[] ACQ_FULL_HEADERS = {"Quantity", "Bought Price", "Sold Price", "Profit"};
 
-	/**
-	 * Applies fonts, row height, renderers, editors and header titles to a
-	 * collection-log table. The {@code expanded} pop-out uses a larger monospaced
-	 * font, full-format numbers and spelled-out headers.
-	 */
 	private void applyAcqRenderers(JTable table, AcquisitionsTableModel model, boolean expanded)
 	{
 		Font f = expanded ? new Font(Font.MONOSPACED, Font.PLAIN, 18) : FontManager.getRunescapeSmallFont();
@@ -3555,6 +3469,11 @@ public class ItemTrackerPanel extends PluginPanel
 		}
 	}
 
+	/**
+	 * Swing table model backing the editable acquisitions log: one row per
+	 * {@link AcquisitionRecord} with quantity, buy price, sell price, and derived
+	 * profit columns. Edits are written straight back to the item's records.
+	 */
 	private class AcquisitionsTableModel extends AbstractTableModel
 	{
 		private final String[] COLS_FULL = {"Qty", "Bought", "Sold", "Profit"};
@@ -3636,16 +3555,15 @@ public class ItemTrackerPanel extends PluginPanel
 			}
 			catch (NumberFormatException ex)
 			{
-				// ignore invalid input, leave value unchanged
+				// Ignore unparseable input and keep the prior cell value.
 			}
 		}
 	}
 
 	/**
-	 * Backs the Notifications table. Each row is a {@link NotificationRule};
-	 * editing a cell mutates the rule in place and enforces the per-metric locks
-	 * (categorical metrics force the {@code =} operator; the 30-day range forces a
-	 * one-month window; quantity has no window).
+	 * Swing table model backing the notification rules: one row per
+	 * {@link NotificationRule} with metric, timeframe, operator, and value columns.
+	 * Editing a cell mutates the rule and notifies the plugin to persist it.
 	 */
 	private class NotificationsTableModel extends AbstractTableModel
 	{
@@ -3707,8 +3625,7 @@ public class ItemTrackerPanel extends PluginPanel
 
 					NotificationMetric m = (NotificationMetric) value;
 					rule.setMetric(m);
-					// Populate the rest of the row with sensible, valid defaults so a
-					// freshly-chosen metric yields a complete rule.
+
 					if (m.locksTimeframeToMonth())
 						rule.setTimeWindow(TimeWindow.MONTH);
 					else if (m.isTimeframeDisabled())
@@ -3750,8 +3667,7 @@ public class ItemTrackerPanel extends PluginPanel
 		private void applyValueEdit(NotificationRule rule, String raw)
 		{
 			NotificationMetric m = rule.getMetric();
-			// No metric chosen yet (blank row): store the text as-is — there is no
-			// kind to parse against, and an incomplete rule never fires anyway.
+
 			if (m == null || m.isCategorical())
 			{
 				rule.setValue(raw.trim());
@@ -3774,7 +3690,11 @@ public class ItemTrackerPanel extends PluginPanel
 
 	}
 
-	/** Value-column editor: a dropdown for categorical metrics, a text field otherwise. */
+	/**
+	 * Cell editor for a notification rule's value column that adapts to the row's
+	 * metric: a dropdown of allowed options for categorical metrics, or a free-text
+	 * field for numeric/percent ones.
+	 */
 	private class NotificationValueEditor extends AbstractCellEditor implements TableCellEditor
 	{
 		private final JComboBox<String> combo = new JComboBox<>();
@@ -3827,7 +3747,7 @@ public class ItemTrackerPanel extends PluginPanel
 		}
 	}
 
-	/** Centered renderer for the Notifications table; shows enum/string labels. */
+	/** Cell renderer for the notifications table, applying the panel's fonts/colors and centered alignment. */
 	private static class NotifCellRenderer extends DefaultTableCellRenderer
 	{
 		NotifCellRenderer()
@@ -3851,11 +3771,7 @@ public class ItemTrackerPanel extends PluginPanel
 		}
 	}
 
-	/**
-	 * Renders collection-log numbers: full format at ≤4 digits, short format
-	 * when they would overflow. Short-form cells highlight (column-tinted) and
-	 * carry a full-value tooltip on hover, mirroring the rest of the plugin.
-	 */
+	/** Cell renderer for the acquisitions table, coloring the profit column and formatting gp values. */
 	private class AcqCellRenderer extends DefaultTableCellRenderer
 	{
 		private final boolean profit;
@@ -3886,9 +3802,7 @@ public class ItemTrackerPanel extends PluginPanel
 			}
 
 			long v = ((Number) value).longValue();
-			// Profit overflows sooner (it carries a sign), so it goes short at 4+ digits
-			// and is capped to 3 significant figures (e.g. 234K / 23.4K, never 234.5K).
-			// The expanded pop-out always shows full comma-grouped numbers.
+
 			boolean shortForm = !expanded && Math.abs(v) >= (profit ? 1000 : 10000);
 			String text = shortForm
 					? GpFormat.shortValue(v)
@@ -3916,11 +3830,7 @@ public class ItemTrackerPanel extends PluginPanel
 		}
 	}
 
-	/**
-	 * 30-day price range gradient (red → gold → green) with an inverted
-	 * triangle marking where the live price sits within the range. The
-	 * triangle is tinted to match the gradient colour beneath it.
-	 */
+	/** Small custom-painted bar showing where the live price sits within its 30-day low/high range. */
 	private static final class PriceRangeBar extends JPanel
 	{
 		private static final Color RANGE_RED = new Color(220, 100, 100);
@@ -3928,7 +3838,7 @@ public class ItemTrackerPanel extends PluginPanel
 		private static final Color RANGE_GREEN = new Color(100, 220, 100);
 		private static final int TRIANGLE_H = 9;
 		private static final int BAR_H = 5;
-		private static final int BAR_ARC = 3; // 1.5px corner radius
+		private static final int BAR_ARC = 3;
 
 		private long min;
 		private long max;
@@ -3997,7 +3907,6 @@ public class ItemTrackerPanel extends PluginPanel
 					return;
 				}
 
-				// Draw the gradient clipped to a rounded rectangle for soft corners.
 				Shape oldClip = g2.getClip();
 				g2.setClip(new java.awt.geom.RoundRectangle2D.Double(0, barY, barW, BAR_H, BAR_ARC, BAR_ARC));
 				for (int x = 0; x < barW; x++)

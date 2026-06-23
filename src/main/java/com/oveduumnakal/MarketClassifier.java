@@ -8,9 +8,13 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Pure classifiers for the categorical market metrics (Volatility, Liquidity,
- * 30-day range position) shared by the detail-view Market Info panel and the
- * notification engine so both produce identical bucket labels.
+ * Derives the human-readable market ratings shown for an item &ndash;
+ * volatility, liquidity, and where today's price sits within its 30-day range
+ * &ndash; from raw wiki price history.
+ *
+ * <p>Each method maps continuous figures onto coarse {@code "Low"}/{@code
+ * "Medium"}/{@code "High"}-style buckets, returning {@code null} when there is
+ * not enough data to classify. This is a stateless package-private utility.
  */
 final class MarketClassifier
 {
@@ -19,8 +23,12 @@ final class MarketClassifier
 	}
 
 	/**
-	 * Classifies week-series price variability as {@code Low}/{@code Medium}/
-	 * {@code High}, or {@code null} when there is too little data.
+	 * Rates price volatility over the past week as the coefficient of variation
+	 * (standard deviation / mean) of the high/low samples.
+	 *
+	 * @param weekSeries 1h price points covering (at least) the last week
+	 * @return {@code "Low"} (&lt;1.5%), {@code "Medium"} (&le;5%), {@code "High"},
+	 *         or {@code null} if fewer than two samples are available
 	 */
 	static String volatility(List<WikiRealtimePriceClient.PricePoint> weekSeries)
 	{
@@ -63,8 +71,11 @@ final class MarketClassifier
 	}
 
 	/**
-	 * Classifies 24h volume as {@code Low}/{@code Medium}/{@code High}, or
-	 * {@code null} when no volume is known.
+	 * Rates trading liquidity from the last 24h of volume.
+	 *
+	 * @param vol24 units traded in the past day
+	 * @return {@code "Low"} (&lt;500), {@code "Medium"} (&le;5000), {@code "High"},
+	 *         or {@code null} when volume is unknown
 	 */
 	static String liquidity(long vol24)
 	{
@@ -80,7 +91,13 @@ final class MarketClassifier
 		return "High";
 	}
 
-	/** Min/max average price over the last 30 days, or {@code {0, 0}} when unknown. */
+	/**
+	 * Finds the lowest low and highest high over the past 30 days.
+	 *
+	 * @param monthSeries price points covering (at least) the last month
+	 * @return a two-element {@code [min, max]} array, or {@code [0, 0]} if no
+	 *         in-window samples were found
+	 */
 	static long[] thirtyDayRange(List<WikiRealtimePriceClient.PricePoint> monthSeries)
 	{
 		long cutoff = System.currentTimeMillis() / 1000L - TimeWindow.MONTH.getDuration().getSeconds();
@@ -105,9 +122,13 @@ final class MarketClassifier
 	}
 
 	/**
-	 * Classifies where {@code live} sits within the {@code [min, max]} range as
-	 * one of Lowest / Low / Low Avg / Average / High Avg / High / Highest, or
-	 * {@code null} when the range is unusable.
+	 * Labels where the live price falls within a {@code [min, max]} range as a
+	 * fraction of the way up, from {@code "Lowest"} to {@code "Highest"}.
+	 *
+	 * @param min  range low (e.g. from {@link #thirtyDayRange})
+	 * @param max  range high
+	 * @param live the current price
+	 * @return a position label, or {@code null} if the range or live price is invalid
 	 */
 	static String rangePosition(long min, long max, long live)
 	{

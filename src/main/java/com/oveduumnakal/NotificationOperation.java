@@ -5,8 +5,9 @@
 package com.oveduumnakal;
 
 /**
- * Comparison operator for a notification rule. The symbol is shown in the table
- * dropdown and in the fired notification text.
+ * The comparison operator of a {@link NotificationRule}, used to decide whether a
+ * metric's current value has met the rule's target. Each constant carries its
+ * display {@code symbol} (e.g. {@code ">="}) and evaluates via {@link #test}.
  */
 public enum NotificationOperation
 {
@@ -28,7 +29,13 @@ public enum NotificationOperation
 		return symbol;
 	}
 
-	/** Tests {@code current <op> target} for numeric metrics. */
+	/**
+	 * Applies this operator to a metric reading.
+	 *
+	 * @param current the metric's current value
+	 * @param target  the rule's threshold
+	 * @return {@code true} if {@code current} satisfies the operator against {@code target}
+	 */
 	public boolean test(double current, double target)
 	{
 		switch (this)

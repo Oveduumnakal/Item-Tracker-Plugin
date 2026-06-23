@@ -5,9 +5,10 @@
 package com.oveduumnakal;
 
 /**
- * Position a detail-view section occupies, or {@link #NONE} to hide it.
- * Used by the "Show {Section}" config dropdowns. The ordinal (minus one for
- * the non-NONE values) gives the sort order within the detail view.
+ * An ordinal position ({@link #FIRST}..{@link #NINTH}) assigned to a detail-view
+ * section to control its order, or {@link #NONE} to hide it. Used by the config
+ * so each section can be placed independently. The {@code label} is the name
+ * shown in the config dropdown.
  */
 public enum SectionSlot
 {

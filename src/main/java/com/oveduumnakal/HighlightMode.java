@@ -24,6 +24,12 @@
  */
 package com.oveduumnakal;
 
+/**
+ * Where tracked items are highlighted: on the {@link #GROUND}, in the
+ * {@link #INV_BANK} (inventory/bank), {@link #BOTH}, or {@link #OFF}. Query the
+ * surfaces with {@link #ground()} and {@link #invBank()} rather than comparing
+ * constants. The {@code displayName} is the label shown in the config dropdown.
+ */
 public enum HighlightMode
 {
 	GROUND("Ground"),
@@ -38,11 +44,13 @@ public enum HighlightMode
 		this.displayName = displayName;
 	}
 
+	/** @return whether ground items should be highlighted in this mode. */
 	public boolean ground()
 	{
 		return this == GROUND || this == BOTH;
 	}
 
+	/** @return whether inventory/bank items should be highlighted in this mode. */
 	public boolean invBank()
 	{
 		return this == INV_BANK || this == BOTH;

@@ -9,10 +9,14 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * A metric a per-item notification rule can watch. Each value carries the short
- * label shown in the Notifications table dropdown, the longer display name used
- * in the fired notification text, and behaviour flags describing how the rest of
- * the row (time frame, operation, value) is constrained.
+ * The item attribute a {@link NotificationRule} watches &ndash; a price, profit,
+ * volume, percent change, quantity, or a categorical rating.
+ *
+ * <p>Each constant pairs a short {@code label} (used in the rule chip) with a
+ * longer {@code displayName} and a {@link Kind} that drives how the rule's value
+ * is entered and compared. Categorical metrics additionally carry their allowed
+ * {@code options}. The {@code locks*}/{@code is*} predicates capture per-metric
+ * UI constraints (e.g. {@link #RANGE_30D} only makes sense over a month).
  */
 public enum NotificationMetric
 {
@@ -29,7 +33,7 @@ public enum NotificationMetric
 	RANGE_30D("30d Range", "30 Day Range", Kind.CATEGORY,
 			"Lowest", "Low", "Low Avg", "Average", "High Avg", "High", "Highest");
 
-	/** Broad category of the metric's value, driving input type and comparisons. */
+	/** The value domain of a metric, controlling input and comparison semantics. */
 	public enum Kind
 	{
 		NUMERIC, PERCENT, QUANTITY, CATEGORY
@@ -65,7 +69,6 @@ public enum NotificationMetric
 		return kind;
 	}
 
-	/** Allowed values for categorical metrics; empty for numeric metrics. */
 	public List<String> getOptions()
 	{
 		return options;
@@ -76,19 +79,19 @@ public enum NotificationMetric
 		return kind == Kind.CATEGORY;
 	}
 
-	/** Categorical metrics only make sense with an equality test. */
+	/** Categorical metrics compare by exact match, so the operator is forced to "=". */
 	public boolean locksOperationToEquals()
 	{
 		return kind == Kind.CATEGORY;
 	}
 
-	/** The 30-day range is, by definition, a one-month window. */
+	/** {@link #RANGE_30D} is inherently a 30-day metric, so its timeframe is pinned to a month. */
 	public boolean locksTimeframeToMonth()
 	{
 		return this == RANGE_30D;
 	}
 
-	/** Quantity reflects current holdings and has no per-window value. */
+	/** Quantity is a live inventory count with no timeframe to choose. */
 	public boolean isTimeframeDisabled()
 	{
 		return this == QUANTITY;

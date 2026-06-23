@@ -32,19 +32,27 @@ import net.runelite.client.config.ConfigSection;
 import net.runelite.client.config.Notification;
 import net.runelite.client.config.Range;
 
+/**
+ * RuneLite configuration for the Item Tracker plugin.
+ *
+ * <p>Defines every user-facing setting as a defaulted {@code @ConfigItem}
+ * accessor, grouped into five {@code @ConfigSection}s: main view, tracked-item
+ * row display, GE estimates, tracking/highlighting, and the detail view. The
+ * {@code KEY_*} constants are the persisted setting keys (also used directly by
+ * the plugin when reading/writing config), and {@link #GROUP} names the config
+ * group. Each accessor's behavior is described by its annotation; the per-item
+ * {@code name}/{@code description} are the source of truth shown in the UI.
+ */
 @ConfigGroup(ItemTrackerConfig.GROUP)
 public interface ItemTrackerConfig extends Config
 {
 	String GROUP = "itemtracker";
 
-	// Internal
 	String KEY_TRACKED_ITEMS = "trackedItemIds";
 
-	// Section 1: Main View Settings
 	String KEY_PRICE_REFRESH_SECONDS = "priceRefreshSeconds";
 	String KEY_PRICE_CHANGE_INDICATOR = "priceChangeIndicator";
 
-	// Section 2: Tracked Item Display
 	String KEY_SHOW_COL_HIGH = "showColHigh";
 	String KEY_SHOW_COL_LOW = "showColLow";
 	String KEY_SHOW_COL_AVG = "showColAvg";
@@ -55,7 +63,6 @@ public interface ItemTrackerConfig extends Config
 	String KEY_ROW_3_DATA = "row3Data";
 	String KEY_SHOW_ITEM_PROFIT_ROW = "showItemProfitRow";
 
-	// Section 3: Detailed View
 	String KEY_SHOW_ITEM_VALUES = "showItemValues";
 	String KEY_SHOW_COLLECTION_VALUES = "showCollectionValues";
 	String KEY_SHOW_MARKET_INFO = "showMarketInfo";
@@ -69,7 +76,6 @@ public interface ItemTrackerConfig extends Config
 	String KEY_AUTO_ADD_ITEMS = "autoAddItems";
 	String KEY_NOTIFICATION_STYLE = "notificationStyle";
 
-	// Section 4: GE Estimates Display
 	String KEY_SHOW_GE_ESTIMATES = "showGeEstimates";
 	String KEY_GE_ESTIMATES_POSITION = "geEstimatesPosition";
 	String KEY_GE_ESTIMATES_FORMAT = "geEstimatesFormat";
@@ -79,7 +85,6 @@ public interface ItemTrackerConfig extends Config
 	String KEY_SHOW_EST_AVG = "showEstAvg";
 	String KEY_SHOW_EST_PROFIT = "showEstProfit";
 
-	// Section 5: Tracking
 	String KEY_ADD_CONTEXT_MENU_OPTION = "addContextMenuOption";
 	String KEY_TRACK_ITEM_COLOR = "trackItemColor";
 	String KEY_STOP_TRACKING_COLOR = "stopTrackingColor";
@@ -87,6 +92,7 @@ public interface ItemTrackerConfig extends Config
 	String KEY_HIGHLIGHT_COLOR = "highlightColor";
 	String KEY_GLOW_EFFECT = "glowEffect";
 
+	/** Top-level panel behavior: price refresh, change indicator, and global toggles. */
 	@ConfigSection(
 			name = "Main View Settings",
 			description = "Top-level main view settings",
@@ -94,6 +100,7 @@ public interface ItemTrackerConfig extends Config
 	)
 	String mainViewSection = "mainView";
 
+	/** Which columns and rows each tracked-item entry shows in the list. */
 	@ConfigSection(
 			name = "Tracked Item Display",
 			description = "Controls what each tracked item row shows",
@@ -101,6 +108,7 @@ public interface ItemTrackerConfig extends Config
 	)
 	String trackedItemSection = "trackedItem";
 
+	/** Placement, format, spacing, and rows of the estimated GE sell-value block. */
 	@ConfigSection(
 			name = "GE Estimates Display",
 			description = "Controls the Estimated GE Sell Value section",
@@ -108,6 +116,7 @@ public interface ItemTrackerConfig extends Config
 	)
 	String geEstimatesSection = "geEstimates";
 
+	/** Context-menu integration, highlight colors/mode, and the glow effect. */
 	@ConfigSection(
 			name = "Tracking",
 			description = "Context menu, highlighting, and tracking behavior",
@@ -115,14 +124,13 @@ public interface ItemTrackerConfig extends Config
 	)
 	String trackingSection = "tracking";
 
+	/** Order, visibility, and contents of the per-item detail view sections. */
 	@ConfigSection(
 			name = "Detailed View",
 			description = "Order, visibility, and contents of the item detail view sections",
 			position = 4
 	)
 	String detailViewSection = "detailView";
-
-	// ---- Section 1: Main View Settings ----
 
 	@Range(min = 30)
 	@ConfigItem(
@@ -148,8 +156,6 @@ public interface ItemTrackerConfig extends Config
 	{
 		return PriceIndicatorMode.CHANGE;
 	}
-
-	// ---- Section 2: Tracked Item Display ----
 
 	@ConfigItem(
 			keyName = KEY_SHOW_COL_HIGH,
@@ -258,8 +264,6 @@ public interface ItemTrackerConfig extends Config
 	{
 		return true;
 	}
-
-	// ---- Section 3: Detailed View ----
 
 	@ConfigItem(
 			keyName = KEY_SHOW_ITEM_VALUES,
@@ -410,8 +414,6 @@ public interface ItemTrackerConfig extends Config
 		return Notification.ON;
 	}
 
-	// ---- Section 4: GE Estimates Display ----
-
 	@ConfigItem(
 			keyName = KEY_SHOW_GE_ESTIMATES,
 			name = "Show GE Estimates Section",
@@ -508,8 +510,6 @@ public interface ItemTrackerConfig extends Config
 	{
 		return true;
 	}
-
-	// ---- Section 5: Tracking ----
 
 	@ConfigItem(
 			keyName = KEY_ADD_CONTEXT_MENU_OPTION,

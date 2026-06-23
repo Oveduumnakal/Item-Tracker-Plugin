@@ -27,6 +27,16 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * Thin client for the OSRS Wiki real-time prices API
+ * (<a href="https://prices.runescape.wiki">prices.runescape.wiki</a>).
+ *
+ * <p>Fetches live high/low prices, item metadata (buy limit, GE value, alch
+ * values), and historical time series, and aggregates a series into
+ * {@link PriceStats}. Every call is defensive: network, HTTP, and malformed-JSON
+ * failures are logged and return an empty result rather than throwing, and
+ * individual bad entries are skipped.
+ */
 @Slf4j
 public class WikiRealtimePriceClient
 {
@@ -39,12 +49,14 @@ public class WikiRealtimePriceClient
 
 	private static final String USER_AGENT = "RuneLite ItemTracker Plugin";
 
+	/** The latest instant-buy ({@code high}) and instant-sell ({@code low}) prices for one item. */
 	@Value
 	public static class ItemPrices
 	{
 		long high;
 		long low;
 
+		/** @return the midpoint of high and low, or whichever side is present if only one is. */
 		public long avg()
 		{
 			if (high > 0 && low > 0)
@@ -54,6 +66,10 @@ public class WikiRealtimePriceClient
 		}
 	}
 
+	/**
+	 * One sample from a time series: the average high/low prices and traded
+	 * volumes over the bucket ending at {@code timestamp} (epoch seconds).
+	 */
 	@Data
 	@AllArgsConstructor
 	@NoArgsConstructor
@@ -66,6 +82,7 @@ public class WikiRealtimePriceClient
 		private long lowPriceVolume;
 	}
 
+	/** Static GE metadata for an item: buy {@code limit}, store {@code value}, and high/low alch values. */
 	@Value
 	public static class ItemMapping
 	{
@@ -85,6 +102,12 @@ public class WikiRealtimePriceClient
 		this.gson = gson;
 	}
 
+	/**
+	 * Fetches the latest high/low prices for every item from the {@code /latest}
+	 * endpoint.
+	 *
+	 * @return a map of item id to prices, or an empty map on any failure
+	 */
 	public Map<Integer, ItemPrices> fetchAll()
 	{
 		Request request = new Request.Builder()
@@ -120,7 +143,7 @@ public class WikiRealtimePriceClient
 				}
 				catch (NumberFormatException | IllegalStateException e)
 				{
-					// skip malformed entries
+					// Skip a malformed entry rather than failing the whole fetch.
 				}
 			}
 
@@ -133,6 +156,11 @@ public class WikiRealtimePriceClient
 		}
 	}
 
+	/**
+	 * Fetches per-item GE metadata from the {@code /mapping} endpoint.
+	 *
+	 * @return a map of item id to {@link ItemMapping}, or an empty map on any failure
+	 */
 	public Map<Integer, ItemMapping> fetchMapping()
 	{
 		Request request = new Request.Builder()
@@ -170,7 +198,7 @@ public class WikiRealtimePriceClient
 				}
 				catch (IllegalStateException | NumberFormatException e)
 				{
-					// skip malformed entries
+					// Skip a malformed entry rather than failing the whole fetch.
 				}
 			}
 
@@ -183,6 +211,13 @@ public class WikiRealtimePriceClient
 		}
 	}
 
+	/**
+	 * Fetches the price/volume history for one item at a given sampling step.
+	 *
+	 * @param itemId   the item to query
+	 * @param timestep the bucket size, e.g. {@code "5m"}, {@code "1h"}, {@code "6h"}, {@code "24h"}
+	 * @return the points oldest-first, or an empty list on any failure
+	 */
 	public List<PricePoint> fetchTimeseries(int itemId, String timestep)
 	{
 		HttpUrl url = HttpUrl.parse(TIMESERIES_URL).newBuilder()
@@ -223,7 +258,7 @@ public class WikiRealtimePriceClient
 				}
 				catch (IllegalStateException e)
 				{
-					// skip malformed entries
+					// Skip a malformed point rather than failing the whole fetch.
 				}
 			}
 
@@ -236,6 +271,7 @@ public class WikiRealtimePriceClient
 		}
 	}
 
+	/** Reads a numeric field as a long, returning 0 when absent, null, or non-numeric. */
 	private static long readLong(JsonObject obj, String key)
 	{
 		if (!obj.has(key) || obj.get(key).isJsonNull())
@@ -251,6 +287,18 @@ public class WikiRealtimePriceClient
 		}
 	}
 
+	/**
+	 * Aggregates a time series into summary {@link PriceStats} over a window.
+	 *
+	 * <p>Points older than the window are ignored. High and low are simple
+	 * averages of samples that have both a price and volume on that side; the
+	 * average is volume-weighted across both sides (falling back to the high/low
+	 * midpoint when no volume is present). Volume is the total units traded.
+	 *
+	 * @param points the item's history (may be {@code null} or empty)
+	 * @param window the look-back window; a zero duration means "all points"
+	 * @return the computed stats, or all-zero stats when there is no data
+	 */
 	public static PriceStats computeStats(List<PricePoint> points, TimeWindow window)
 	{
 		if (points == null || points.isEmpty())

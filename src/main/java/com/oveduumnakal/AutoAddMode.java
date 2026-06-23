@@ -5,9 +5,17 @@
 package com.oveduumnakal;
 
 /**
- * Controls automatic acquisition creation when tracked-item quantities grow.
- * Every mode except {@link #OFF} behaves like the old "Auto-Update Quantity"
- * flag being enabled; they differ only in the "bought at" price recorded.
+ * Controls whether newly obtained items are auto-added to the tracker and, if so,
+ * which price seeds their initial cost basis.
+ *
+ * <ul>
+ *   <li>{@link #HIGH}/{@link #LOW}/{@link #AVG} &ndash; seed the cost basis at the
+ *       item's current high, low, or average price.</li>
+ *   <li>{@link #ZERO} &ndash; auto-add with a zero cost basis (pure gain).</li>
+ *   <li>{@link #OFF} &ndash; disable auto-adding.</li>
+ * </ul>
+ *
+ * <p>The {@code label} is the human-readable name shown in the config dropdown.
  */
 public enum AutoAddMode
 {

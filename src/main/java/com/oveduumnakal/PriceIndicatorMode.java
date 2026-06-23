@@ -24,6 +24,11 @@
  */
 package com.oveduumnakal;
 
+/**
+ * Which price-movement indicators are shown on item rows: {@link #ALL} prices,
+ * only those that {@link #CHANGE}d, or {@link #OFF}. The {@code displayName} is
+ * the label shown in the config dropdown.
+ */
 public enum PriceIndicatorMode
 {
 	ALL("All"),

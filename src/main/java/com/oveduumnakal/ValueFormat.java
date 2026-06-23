@@ -24,6 +24,12 @@
  */
 package com.oveduumnakal;
 
+/**
+ * How gp values are rendered: {@link #ABBREVIATED} compact suffixes
+ * (e.g. {@code 1.5M}) or {@link #FULL} comma-grouped digits
+ * (e.g. {@code 1,500,000}). See {@link GpFormat} for the formatting itself. The
+ * {@code displayName} is the label shown in the config dropdown.
+ */
 public enum ValueFormat
 {
 	ABBREVIATED("Short (k,m,b)"),

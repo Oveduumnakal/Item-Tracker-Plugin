@@ -34,6 +34,15 @@ import net.runelite.api.widgets.WidgetItem;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.ui.overlay.WidgetItemOverlay;
 
+/**
+ * Widget overlay that draws a colored outline around tracked items in the
+ * inventory and bank.
+ *
+ * <p>For each rendered item widget whose canonical id is tracked, it fetches the
+ * item's outline image and blits it at the configured highlight color, modulated
+ * by the plugin's pulsing breathing alpha. Skips rendering when inventory/bank
+ * highlighting is disabled in config.
+ */
 public class ItemTrackerHighlightOverlay extends WidgetItemOverlay
 {
 	private final ItemTrackerPlugin plugin;

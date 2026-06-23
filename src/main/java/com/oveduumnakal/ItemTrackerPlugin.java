@@ -78,6 +78,18 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 @Slf4j
+/**
+ * Plugin entry point: wires up the side panel and overlays and drives all
+ * tracking logic.
+ *
+ * <p>Responsibilities: persisting and restoring the tracked-item set; counting
+ * each item across the watched inventory/bank containers (and the rune pouch);
+ * polling the wiki for live prices, metadata, and history; maintaining each
+ * item's cost-basis lots (FIFO acquire/close) for profit; and evaluating
+ * user-defined notification rules. It subscribes to the relevant game events and
+ * marshals UI work onto the Swing thread and network work onto a background
+ * executor.
+ */
 @PluginDescriptor(
 		name = "Item Tracker",
 		description = "Track item quantities across your inventory and bank with live GE prices",
@@ -177,13 +189,16 @@ public class ItemTrackerPlugin extends Plugin
 	private ScheduledFuture<?> priceRefreshTask;
 	private Instant lastPriceRefresh = null;
 
-	// Item IDs for alchemy rune cost calculations.
 	private static final int NATURE_RUNE_ID = 561;
 	private static final int FIRE_RUNE_ID = 554;
 
-	// Static item metadata (buy limit, alch values) from the Wiki /mapping endpoint.
 	private volatile Map<Integer, WikiRealtimePriceClient.ItemMapping> itemMappings = Collections.emptyMap();
 
+	/**
+	 * Builds the side panel (wiring its callbacks back to this plugin), registers
+	 * the nav button and overlays, restores persisted items, and kicks off the
+	 * metadata fetch and recurring price refresh.
+	 */
 	@Override
 	protected void startUp() throws Exception
 	{
@@ -214,14 +229,14 @@ public class ItemTrackerPlugin extends Plugin
 		clientThread.invokeLater(() ->
 		{
 			loadPersistedItems();
-			// Show the correct view immediately, including the logged-out placeholder
-			// or an empty (but logged-in) list where loadPersistedItems adds nothing.
+
 			refreshPanel();
 		});
 		executor.execute(this::fetchItemMappings);
 		scheduleRefresh();
 	}
 
+	/** Fetches GE item metadata in the background, keeping the previous map on failure. */
 	private void fetchItemMappings()
 	{
 		Map<Integer, WikiRealtimePriceClient.ItemMapping> mappings = wikiPriceClient.fetchMapping();
@@ -229,6 +244,7 @@ public class ItemTrackerPlugin extends Plugin
 			itemMappings = mappings;
 	}
 
+	/** Tears down the nav button, overlays, panel, and refresh task and clears all in-memory state. */
 	@Override
 	protected void shutDown() throws Exception
 	{
@@ -255,6 +271,7 @@ public class ItemTrackerPlugin extends Plugin
 		return configManager.getConfig(ItemTrackerConfig.class);
 	}
 
+	/** (Re)schedules the recurring GE price refresh at the configured rate (min 30s), replacing any prior task. */
 	private void scheduleRefresh()
 	{
 		if (priceRefreshTask != null)
@@ -268,6 +285,7 @@ public class ItemTrackerPlugin extends Plugin
 
 	private static final Type PERSIST_TYPE = new TypeToken<List<PersistedItem>>(){}.getType();
 
+	/** Serializable snapshot of a tracked item, stored as JSON in the RS profile config. */
 	private static class PersistedItem
 	{
 		int itemId;
@@ -278,6 +296,7 @@ public class ItemTrackerPlugin extends Plugin
 		boolean notificationsInitialized;
 	}
 
+	/** Restores tracked items from the per-profile JSON written by {@link #persistTrackedItems()}. */
 	private void loadPersistedItems()
 	{
 		String saved = configManager.getRSProfileConfiguration(
@@ -308,6 +327,7 @@ public class ItemTrackerPlugin extends Plugin
 
 	}
 
+	/** Serializes the current tracked items (quantity, cost basis, notifications) to per-profile config. */
 	void persistTrackedItems()
 	{
 		List<PersistedItem> list = new ArrayList<>();
@@ -327,6 +347,7 @@ public class ItemTrackerPlugin extends Plugin
 				ItemTrackerConfig.GROUP, ItemTrackerConfig.KEY_TRACKED_ITEMS, gson.toJson(list, PERSIST_TYPE));
 	}
 
+	/** Tracks an item by id with defaults (full tracking mode, no preset cost basis). */
 	private void addTrackedItem(int itemId)
 	{
 		addTrackedItem(itemId, TrackItemMode.TRACK);
@@ -342,6 +363,20 @@ public class ItemTrackerPlugin extends Plugin
 		addTrackedItem(itemId, initialQuantity, records, null, false, costBasisInitialized, true, TrackItemMode.TRACK);
 	}
 
+	/**
+	 * Canonical add: creates a {@link TrackedItem} (resolving its name/tradeable
+	 * flag from the item composition), seeds its quantity, acquisitions, and
+	 * notifications, registers it, and persists/refreshes. No-op if already
+	 * tracked. Runs on the client thread.
+	 *
+	 * @param initialQuantity        starting count
+	 * @param records                preset acquisition lots, or {@code null}
+	 * @param notifications          preset notification rules, or {@code null}
+	 * @param notificationsInitialized whether default rules have already been seeded
+	 * @param costBasisInitialized   whether a cost basis has already been established
+	 * @param syncOnAdd              recount from containers immediately when in TRACK mode
+	 * @param mode                   tracking vs. view-only
+	 */
 	private void addTrackedItem(int itemId, int initialQuantity, List<AcquisitionRecord> records,
 			List<NotificationRule> notifications, boolean notificationsInitialized,
 			boolean costBasisInitialized, boolean syncOnAdd, TrackItemMode mode)
@@ -385,12 +420,6 @@ public class ItemTrackerPlugin extends Plugin
 		});
 	}
 
-	/**
-	 * Removes every entry from the tracked list (both tracked and view-only),
-	 * which also discards their notifications and collection-log rows since those
-	 * live on the {@link TrackedItem}. Invoked from the panel's Clear button after
-	 * the user confirms.
-	 */
 	private void clearAllTrackedItems()
 	{
 		clientThread.invokeLater(() ->
@@ -401,10 +430,7 @@ public class ItemTrackerPlugin extends Plugin
 		});
 	}
 
-	/**
-	 * Lightweight periodic fetch used to keep the main panel's per-window
-	 * stats (including 24h volume) current. Only the 5m resolution is pulled.
-	 */
+	/** Fetches just the 5m series for an item in the background and recomputes its window stats. */
 	private void requestSeries(int itemId, boolean refreshAfter)
 	{
 		executor.execute(() ->
@@ -425,10 +451,9 @@ public class ItemTrackerPlugin extends Plugin
 	}
 
 	/**
-	 * Heavyweight fetch for the detailed view: pulls all three timeseries
-	 * resolutions (5m, 6h, 24h) and item metadata so the graphs, price
-	 * overview, market info and alch sections can all be populated without
-	 * re-fetching when the user switches graph timeframes.
+	 * Fetches all four history series (5m/1h/6h/24h) plus metadata for the
+	 * detail view in the background, then updates stats, alch rune prices, and the
+	 * detail panel on the appropriate threads.
 	 */
 	private void requestDetailData(int itemId)
 	{
@@ -463,10 +488,7 @@ public class ItemTrackerPlugin extends Plugin
 		});
 	}
 
-	/**
-	 * Recomputes the per-window stats from whichever timeseries resolution
-	 * best covers each window. Must run on the client thread.
-	 */
+	/** Rebuilds an item's per-window {@link PriceStats} from its current prices (LIVE) and history series. */
 	private void recomputeWindowStats(TrackedItem tracked)
 	{
 		Map<TimeWindow, PriceStats> stats = new java.util.EnumMap<>(TimeWindow.class);
@@ -479,9 +501,7 @@ public class ItemTrackerPlugin extends Plugin
 				stats.put(w, new PriceStats(tracked.getHighPrice(), tracked.getLowPrice(), tracked.getAvgPrice(), 0));
 			else
 			{
-				// Prefer the resolution that best covers the window, but fall back
-				// to the always-present 5m series until the detail view has fetched
-				// the coarser series so the main panel stays populated.
+
 				List<WikiRealtimePriceClient.PricePoint> series = tracked.getSeriesFor(w);
 				if (series.isEmpty())
 					series = tracked.getSeries5m();
@@ -493,6 +513,7 @@ public class ItemTrackerPlugin extends Plugin
 		tracked.setWindowStats(stats);
 	}
 
+	/** Copies cached GE metadata (buy limit, value, alch values) onto an item, if available. */
 	private void applyItemMetadata(TrackedItem tracked)
 	{
 		WikiRealtimePriceClient.ItemMapping mapping = itemMappings.get(tracked.getItemId());
@@ -506,16 +527,17 @@ public class ItemTrackerPlugin extends Plugin
 		tracked.setMetadataLoaded(true);
 	}
 
+	/** @return a price for a rune (for alch calc): the tracked average if present, else the GE price. */
 	private long runePrice(int itemId)
 	{
 		TrackedItem tracked = trackedItems.get(itemId);
 		if (tracked != null && tracked.getAvgPrice() > 0)
 			return tracked.getAvgPrice();
 
-		// Fall back to the item manager's cached GE price when the rune isn't tracked.
 		return Math.max(0, itemManager.getItemPrice(itemId));
 	}
 
+	/** Clears an item's acquisition lots (resetting its cost basis) and persists/refreshes. */
 	private void clearAcquisitions(int itemId)
 	{
 		clientThread.invokeLater(() ->
@@ -530,6 +552,7 @@ public class ItemTrackerPlugin extends Plugin
 		});
 	}
 
+	/** Fetches the latest prices for all items in the background, then applies them on the client thread. */
 	private void refreshGePrices()
 	{
 		executor.execute(() ->
@@ -540,6 +563,13 @@ public class ItemTrackerPlugin extends Plugin
 		});
 	}
 
+	/**
+	 * Applies freshly fetched prices to every tracked item: records per-side
+	 * deltas against the previous values, updates the LIVE window stats, seeds a
+	 * cost basis on first successful price if one wasn't set, then re-evaluates
+	 * notifications and refreshes the panel (including the open detail view).
+	 * A failed (empty) fetch only triggers a plain refresh.
+	 */
 	private void applyGePrices(Map<Integer, WikiRealtimePriceClient.ItemPrices> all)
 	{
 		boolean fetchFailed = all.isEmpty();
@@ -595,8 +625,7 @@ public class ItemTrackerPlugin extends Plugin
 		{
 			if (item.isTradeable() && item.hasPrices())
 			{
-				// The open detail item gets the full multi-resolution refresh;
-				// everything else just refreshes the cheap 5m stats.
+
 				if (item.getItemId() == detailId)
 					requestDetailData(item.getItemId());
 				else
@@ -605,6 +634,11 @@ public class ItemTrackerPlugin extends Plugin
 		}
 	}
 
+	/**
+	 * Reacts to this plugin's config changes: resolves detail-section slot
+	 * conflicts, reschedules the refresh when the interval changes, and otherwise
+	 * just repaints the panel. Ignores other plugins' groups.
+	 */
 	@Subscribe
 	public void onConfigChanged(ConfigChanged event)
 	{
@@ -617,9 +651,7 @@ public class ItemTrackerPlugin extends Plugin
 			refreshPanel();
 			if (swapped)
 			{
-				// The swap writes the conflicting section's new slot to config, but the
-				// open settings panel doesn't observe config changes, so the swapped
-				// dropdown would keep showing its old value. Force the panel to rebuild.
+
 				rebuildOpenConfigPanel();
 			}
 
@@ -638,7 +670,6 @@ public class ItemTrackerPlugin extends Plugin
 		}
 	}
 
-	/** Config keys of the nine "Show {Section}" detail-view ordering dropdowns. */
 	private static final java.util.Set<String> SECTION_SLOT_KEYS = java.util.Set.of(
 			ItemTrackerConfig.KEY_SHOW_ITEM_VALUES,
 			ItemTrackerConfig.KEY_SHOW_COLLECTION_VALUES,
@@ -651,13 +682,10 @@ public class ItemTrackerPlugin extends Plugin
 			ItemTrackerConfig.KEY_SHOW_ITEM_LOG);
 
 	/**
-	 * Enforces the "each slot used once" rule: when a section is moved to a slot
-	 * already held by another section, the other section takes the moved
-	 * section's previous slot. NONE is exempt (any number may be hidden). The
-	 * resulting state has no duplicate, so the re-entrant ConfigChanged from the
-	 * swap finds nothing further to swap.
+	 * Keeps detail-section slots unique: when a section is moved to a slot already
+	 * occupied by another, the other section is swapped into the vacated slot.
 	 *
-	 * @return true if a conflicting section was moved.
+	 * @return {@code true} if a swap occurred (so the config panel needs rebuilding)
 	 */
 	private boolean swapConflictingSection(ConfigChanged event)
 	{
@@ -694,11 +722,9 @@ public class ItemTrackerPlugin extends Plugin
 	}
 
 	/**
-	 * Forces the currently open RuneLite settings panel to rebuild so a slot
-	 * swapped onto another section is reflected in its dropdown. RuneLite's
-	 * ConfigPanel doesn't observe config changes, and exposes no public refresh,
-	 * so we locate it in the Swing tree and invoke its private rebuild(). Failure
-	 * is non-fatal: the config value is already correct, only the display lags.
+	 * Forces RuneLite's open config panel to rebuild (via reflection) so a slot
+	 * swap is reflected immediately, since the change originated programmatically
+	 * rather than from the user editing that field.
 	 */
 	private void rebuildOpenConfigPanel()
 	{
@@ -722,7 +748,7 @@ public class ItemTrackerPlugin extends Plugin
 		});
 	}
 
-	/** Recursively collects components of the given type under {@code root}. */
+	/** Depth-first collects all components under {@code root} that are instances of {@code type}. */
 	private static List<java.awt.Component> findComponents(java.awt.Component root, Class<?> type)
 	{
 		List<java.awt.Component> found = new ArrayList<>();
@@ -738,6 +764,7 @@ public class ItemTrackerPlugin extends Plugin
 		return found;
 	}
 
+	/** Adds a "Track Item" / "Stop Tracking" right-click option to item menu entries, when enabled. */
 	@Subscribe
 	public void onMenuOpened(MenuOpened event)
 	{
@@ -772,6 +799,7 @@ public class ItemTrackerPlugin extends Plugin
 		}
 	}
 
+	/** @return the item id behind a menu entry (ground item or inventory/bank widget), or -1 if none. */
 	private int getItemIdFromMenuEntry(MenuEntry entry)
 	{
 		switch (entry.getType())
@@ -802,6 +830,12 @@ public class ItemTrackerPlugin extends Plugin
 		return -1;
 	}
 
+	/**
+	 * Tracks per-container item counts as inventory/bank/etc. change, accumulating
+	 * the deltas to apply on the next client tick. The first sight of a container
+	 * after login only seeds a baseline (no deltas); seeing the bank can trigger a
+	 * full reconcile for auto-add.
+	 */
 	@Subscribe
 	public void onItemContainerChanged(ItemContainerChanged event)
 	{
@@ -845,6 +879,11 @@ public class ItemTrackerPlugin extends Plugin
 		refreshPanel();
 	}
 
+	/**
+	 * Per-tick work: flushes any pending quantity sync, evaluates notifications,
+	 * and (when ground highlighting is on) reorders tracked items' "Take" menu
+	 * entries to the bottom so they don't get in the way of normal actions.
+	 */
 	@Subscribe
 	public void onClientTick(ClientTick event)
 	{
@@ -854,8 +893,6 @@ public class ItemTrackerPlugin extends Plugin
 			syncQuantitiesFromContainers();
 		}
 
-		// Evaluate every tick (cheap: numeric comparisons) so rules fire promptly on
-		// quantity/price changes from any source, not only on the periodic price poll.
 		evaluateNotifications();
 
 		if (!config.highlightTrackedItems().ground() || client.isMenuOpen())
@@ -883,18 +920,25 @@ public class ItemTrackerPlugin extends Plugin
 		client.setMenuEntries(normal.toArray(new MenuEntry[0]));
 	}
 
+	/** Records a ground item and its tile so the ground overlay can outline it. */
 	@Subscribe
 	public void onItemSpawned(ItemSpawned event)
 	{
 		groundItems.put(event.getItem(), event.getTile());
 	}
 
+	/** Forgets a ground item once it despawns. */
 	@Subscribe
 	public void onItemDespawned(ItemDespawned event)
 	{
 		groundItems.remove(event.getItem());
 	}
 
+	/**
+	 * Resets transient and per-login state on game-state transitions: clears
+	 * ground items on each load, and on login wipes the count caches and reloads
+	 * the persisted tracked items.
+	 */
 	@Subscribe
 	public void onGameStateChanged(GameStateChanged event)
 	{
@@ -915,7 +959,7 @@ public class ItemTrackerPlugin extends Plugin
 				refreshPanel();
 				break;
 			case LOGIN_SCREEN:
-				// Logged out: refresh so the panel shows the logged-out placeholder.
+
 				refreshPanel();
 				break;
 			default:
@@ -923,6 +967,10 @@ public class ItemTrackerPlugin extends Plugin
 		}
 	}
 
+	/**
+	 * Mirrors rune pouch contents (held in varbits, not a normal container) into
+	 * the quantity counts, accumulating deltas like a container change.
+	 */
 	@Subscribe
 	public void onVarbitChanged(VarbitChanged event)
 	{
@@ -950,6 +998,7 @@ public class ItemTrackerPlugin extends Plugin
 		}
 	}
 
+	/** Rebuilds {@link #runePouchCounts} by reading the rune pouch type/quantity varbits. */
 	private void syncRunePouch()
 	{
 		runePouchCounts.clear();
@@ -966,11 +1015,7 @@ public class ItemTrackerPlugin extends Plugin
 		}
 	}
 
-	/**
-	 * "Bought at" price recorded for an auto-added acquisition, per the Auto Add
-	 * Items mode. OFF falls back to the average price so the cost-basis seeding
-	 * (which is not gated by the mode) keeps its historical behavior.
-	 */
+	/** @return the cost-basis price to seed an auto-added lot with, per the configured {@link AutoAddMode}. */
 	private long autoAddPrice(TrackedItem tracked)
 	{
 		switch (config.autoAddItems())
@@ -988,6 +1033,13 @@ public class ItemTrackerPlugin extends Plugin
 		}
 	}
 
+	/**
+	 * Adds {@code qty} units to an item's held lots at {@code boughtAt} gp.
+	 *
+	 * <p>First it reverses any equal-and-opposite "wash" closes (a prior sell at
+	 * the same price, which a re-acquire should cancel), then merges into an
+	 * existing open lot at the same price, or appends a new lot.
+	 */
 	private void addOpenAcquisition(TrackedItem tracked, int qty, long boughtAt)
 	{
 		if (qty <= 0)
@@ -1024,6 +1076,12 @@ public class ItemTrackerPlugin extends Plugin
 		records.add(new AcquisitionRecord(qty, boughtAt, null));
 	}
 
+	/**
+	 * Merges {@code qty} into an existing closed (sold) lot with the same
+	 * bought/sold prices, to avoid fragmenting the log.
+	 *
+	 * @return {@code true} if a matching lot absorbed the quantity
+	 */
 	private boolean mergeClosed(List<AcquisitionRecord> records, int qty, long boughtAt, long soldAtPrice)
 	{
 		for (AcquisitionRecord r : records)
@@ -1039,6 +1097,15 @@ public class ItemTrackerPlugin extends Plugin
 		return false;
 	}
 
+	/**
+	 * Closes {@code amount} units of held inventory at {@code soldAtPrice},
+	 * oldest lot first (FIFO).
+	 *
+	 * <p>It first cancels any just-added open lots bought at the same price (a
+	 * buy immediately followed by a sell nets out), then realizes the remaining
+	 * amount across the oldest open lots, splitting a lot when only part of it is
+	 * sold and merging into matching closed lots where possible.
+	 */
 	private void closeFifo(TrackedItem tracked, int amount, long soldAtPrice)
 	{
 		List<AcquisitionRecord> records = tracked.getAcquisitions();
@@ -1092,6 +1159,12 @@ public class ItemTrackerPlugin extends Plugin
 		}
 	}
 
+	/**
+	 * Applies the accumulated per-item container deltas to tracked items: positive
+	 * deltas open new lots (auto-add), negative deltas close lots FIFO, and each
+	 * item's quantity is adjusted. No-op when auto-add is off. Persists/refreshes
+	 * if anything changed.
+	 */
 	private void syncQuantitiesFromContainers()
 	{
 		if (pendingItemDeltas.isEmpty())
@@ -1128,6 +1201,12 @@ public class ItemTrackerPlugin extends Plugin
 		}
 	}
 
+	/**
+	 * Recounts every tracked item from scratch across all containers plus the rune
+	 * pouch, and reconciles each item's lots to match the true on-hand total
+	 * (opening or closing lots as needed). Used to catch up after login when full
+	 * container state first becomes available.
+	 */
 	private void reconcileAllQuantities()
 	{
 		pendingItemDeltas.clear();
@@ -1184,6 +1263,7 @@ public class ItemTrackerPlugin extends Plugin
 			persistTrackedItems();
 	}
 
+	/** Recounts a single item across all containers and the rune pouch and sets its quantity. */
 	private void syncQuantitiesForItem(TrackedItem tracked)
 	{
 		if (client.getGameState() != GameState.LOGGED_IN)
@@ -1213,11 +1293,13 @@ public class ItemTrackerPlugin extends Plugin
 		tracked.setQuantity(total);
 	}
 
+	/** @return whether the given (canonical) item id is currently tracked. */
 	boolean isTracked(int itemId)
 	{
 		return trackedItems.containsKey(itemId);
 	}
 
+	/** Callback after the user edits an item's acquisitions: re-derives its quantity from the lots and persists. */
 	void onAcquisitionsEdited(int itemId)
 	{
 		clientThread.invokeLater(() ->
@@ -1233,6 +1315,7 @@ public class ItemTrackerPlugin extends Plugin
 		});
 	}
 
+	/** Callback after the user edits an item's notification rules: just persists the change. */
 	private void onNotificationsEdited(int itemId)
 	{
 		clientThread.invokeLater(() ->
@@ -1242,9 +1325,11 @@ public class ItemTrackerPlugin extends Plugin
 		});
 	}
 
-	// Δ% beyond this magnitude indicates a sparse/stale window average rather than
-	// a real price move; such values are ignored so a one-and-done rule is not
-	// fired on noise from a near-zero denominator.
+	/**
+	 * Maximum plausible Δ% for a notification: changes beyond this magnitude
+	 * indicate a sparse/stale window average (a near-zero denominator) rather than
+	 * a real move, and are ignored so a one-shot rule isn't fired on noise.
+	 */
 	private static final double MAX_DELTA_PCT = 1000.0;
 
 	private static final long GLOW_PERIOD_SLOW_MS = 2000;
@@ -1253,6 +1338,7 @@ public class ItemTrackerPlugin extends Plugin
 	private static final float GLOW_MIN_ALPHA = 0.2f;
 	private static final float GLOW_MAX_ALPHA = 1f;
 
+	/** @return the current highlight alpha, a sine "breathing" pulse whose period depends on the glow speed config. */
 	float breathingAlpha()
 	{
 		long period;
@@ -1276,16 +1362,24 @@ public class ItemTrackerPlugin extends Plugin
 		return GLOW_MIN_ALPHA + (GLOW_MAX_ALPHA - GLOW_MIN_ALPHA) * (float) wave;
 	}
 
+	/** @return the live map of on-screen ground items to their tiles (used by the ground overlay). */
 	Map<TileItem, Tile> getGroundItems()
 	{
 		return groundItems;
 	}
 
+	/** Refreshes the panel without flagging a price update (no change indicators). */
 	private void refreshPanel()
 	{
 		refreshPanel(false);
 	}
 
+	/**
+	 * Pushes the current tracked items and totals to the panel on the Swing thread.
+	 *
+	 * @param pricesUpdated whether this refresh follows a price change, enabling
+	 *                      the per-row change indicators
+	 */
 	private void refreshPanel(boolean pricesUpdated)
 	{
 		final Instant refresh = lastPriceRefresh;
@@ -1293,19 +1387,16 @@ public class ItemTrackerPlugin extends Plugin
 				? config.priceChangeIndicator()
 				: PriceIndicatorMode.OFF;
 		final List<TrackedItem> items = new ArrayList<>(trackedItems.values());
-		// LOADING counts as in-game (region change) so the panel doesn't flash the
-		// logged-out placeholder while running around.
+
 		final GameState gs = client.getGameState();
 		final boolean loggedIn = gs == GameState.LOGGED_IN || gs == GameState.LOADING;
 		SwingUtilities.invokeLater(() -> panel.rebuild(items, refresh, indicatorMode, loggedIn));
 	}
 
 	/**
-	 * Evaluates every item's notification rules and fires those whose condition
-	 * is met. Rules are one-and-done: a rule fires exactly once and is then
-	 * removed from its item's list. Removed rules are persisted and the panel is
-	 * refreshed so the change is reflected immediately. Must run on the client
-	 * thread (reads {@link #trackedItems}).
+	 * Evaluates every item's notification rules and fires the configured notifier
+	 * for any that are met. A fired rule is one-shot: it is removed after firing.
+	 * Skipped when notifications are disabled or the user is editing them.
 	 */
 	private void evaluateNotifications()
 	{
@@ -1313,9 +1404,6 @@ public class ItemTrackerPlugin extends Plugin
 		if (!style.isEnabled())
 			return;
 
-		// Hold off while the user is editing a rule: firing removes the rule and
-		// refreshes the panel, which would wedge the open cell editor. Evaluation
-		// resumes on the next tick once they finish editing.
 		if (panel.isEditingNotifications())
 			return;
 
@@ -1329,13 +1417,13 @@ public class ItemTrackerPlugin extends Plugin
 				Boolean condition = evaluateRule(item, rule);
 				if (condition == null)
 				{
-					// Required data not ready yet, or a blank row; leave it in place.
+
 					continue;
 				}
 
 				if (condition)
 				{
-					// One-and-done: fire once, then drop the rule from the list.
+
 					notifier.notify(style, notificationText(item, rule));
 					it.remove();
 					changed = true;
@@ -1350,13 +1438,18 @@ public class ItemTrackerPlugin extends Plugin
 		}
 	}
 
-	/** @return true/false for the rule's condition, or null when it cannot be evaluated yet. */
+	/**
+	 * Evaluates a single rule against an item.
+	 *
+	 * @return {@code TRUE}/{@code FALSE} for the condition, or {@code null} when it
+	 *         can't be evaluated yet (incomplete rule or missing/unparseable data)
+	 */
 	private Boolean evaluateRule(TrackedItem item, NotificationRule rule)
 	{
 		NotificationMetric metric = rule.getMetric();
 		if (metric == null || rule.getOperation() == null)
 		{
-			// Incomplete (blank) row; nothing to evaluate.
+
 			return null;
 		}
 
@@ -1383,6 +1476,12 @@ public class ItemTrackerPlugin extends Plugin
 		return rule.getOperation().test(current.getAsDouble(), target.getAsDouble());
 	}
 
+	/**
+	 * Resolves the current numeric reading of a metric for an item over a window
+	 * (price, volume, profit, HA profit, Δ% vs. the window average, or quantity).
+	 *
+	 * @return the value, or empty when the underlying data is missing or unreliable
+	 */
 	private OptionalDouble numericValue(TrackedItem item, NotificationMetric metric, TimeWindow window)
 	{
 		if (metric == NotificationMetric.QUANTITY)
@@ -1421,6 +1520,12 @@ public class ItemTrackerPlugin extends Plugin
 		}
 	}
 
+	/**
+	 * Resolves the current categorical rating of a metric for an item
+	 * (volatility, liquidity, or 30-day range position) via {@link MarketClassifier}.
+	 *
+	 * @return the rating label, or {@code null} when it can't be classified
+	 */
 	private String categoryValue(TrackedItem item, NotificationMetric metric)
 	{
 		switch (metric)
@@ -1442,6 +1547,7 @@ public class ItemTrackerPlugin extends Plugin
 		}
 	}
 
+	/** Builds the user-facing notification message, e.g. {@code "Item Tracker: Coal - High >= 200"}. */
 	private String notificationText(TrackedItem item, NotificationRule rule)
 	{
 		NotificationMetric metric = rule.getMetric();

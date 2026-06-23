@@ -9,8 +9,10 @@ import java.util.EnumSet;
 import java.util.Set;
 
 /**
- * Preset selecting which time-window rows the detail-view Price Overview shows.
- * Replaces the per-row multi-select with a single, easy-to-read dropdown.
+ * A named selection of {@link TimeWindow}s shown as columns in the price
+ * overview grid, ranging from a short {@link #RECENT} set to the full
+ * {@link #DETAILED} set. Each preset carries a display {@code label} and its
+ * immutable set of windows (see {@link #getWindows()}).
  */
 public enum OverviewPreset
 {
@@ -32,7 +34,6 @@ public enum OverviewPreset
 		this.windows = Collections.unmodifiableSet(windows);
 	}
 
-	/** Time-window rows shown by this preset. */
 	public Set<TimeWindow> getWindows()
 	{
 		return windows;

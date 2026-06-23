@@ -4,6 +4,11 @@
  */
 package com.oveduumnakal;
 
+/**
+ * Where the GE value estimate block sits within an item's detail card &ndash;
+ * above ({@link #TOP}) or below ({@link #BOTTOM}) the other sections. The
+ * {@code label} is the name shown in the config dropdown.
+ */
 public enum EstimatesPosition
 {
 	TOP("Top"),

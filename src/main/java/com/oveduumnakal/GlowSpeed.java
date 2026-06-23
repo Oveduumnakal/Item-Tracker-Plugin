@@ -24,6 +24,11 @@
  */
 package com.oveduumnakal;
 
+/**
+ * Pulse rate of the highlight glow effect, from {@link #SLOW} to {@link #FAST},
+ * or {@link #OFF} for a steady (non-pulsing) highlight. The {@code displayName}
+ * is the label shown in the config dropdown.
+ */
 public enum GlowSpeed
 {
 	SLOW("Slow"),
