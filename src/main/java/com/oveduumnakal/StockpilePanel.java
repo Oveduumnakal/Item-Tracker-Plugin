@@ -89,7 +89,7 @@ import java.util.function.Consumer;
  * {@link #refreshDetailData}. All methods run on the Swing EDT.
  */
 @Slf4j
-public class ItemTrackerPanel extends PluginPanel
+public class StockpilePanel extends PluginPanel
 {
 	private static final NumberFormat NUMBER_FORMAT = NumberFormat.getNumberInstance(Locale.US);
 
@@ -103,7 +103,7 @@ public class ItemTrackerPanel extends PluginPanel
 	private static final Color TINT_VOLUME = new Color(55, 55, 55);
 
 	private final ItemManager itemManager;
-	private final ItemTrackerConfig config;
+	private final StockpileConfig config;
 	private final BiConsumer<Integer, TrackItemMode> onAddItem;
 	private final Consumer<Integer> onRemoveItem;
 	private final Consumer<Integer> onAcquisitionsEdited;
@@ -315,9 +315,9 @@ public class ItemTrackerPanel extends PluginPanel
 	 * @param onNotificationsEdited callback after notification rules are edited
 	 * @param onClearAll            callback to clear all tracked items
 	 */
-	public ItemTrackerPanel(
+	public StockpilePanel(
 			ItemManager itemManager,
-			ItemTrackerConfig config,
+			StockpileConfig config,
 			BiConsumer<Integer, TrackItemMode> onAddItem,
 			Consumer<Integer> onRemoveItem,
 			Consumer<Integer> onAcquisitionsEdited,
@@ -340,7 +340,7 @@ public class ItemTrackerPanel extends PluginPanel
 		setBorder(new EmptyBorder(10, 10, 10, 10));
 		setBackground(ColorScheme.DARK_GRAY_COLOR);
 
-		JLabel title = new JLabel("Item Tracker");
+		JLabel title = new JLabel("Stockpile");
 		title.setForeground(Color.WHITE);
 		title.setFont(FontManager.getRunescapeBoldFont());
 		title.setBorder(new EmptyBorder(0, 0, 4, 0));
@@ -1784,7 +1784,7 @@ public class ItemTrackerPanel extends PluginPanel
 				return;
 
 			int choice = JOptionPane.showConfirmDialog(
-					ItemTrackerPanel.this,
+					StockpilePanel.this,
 					"Clear the entire collection log for this item?",
 					"Clear Collection Log",
 					JOptionPane.YES_NO_OPTION,
@@ -2742,7 +2742,7 @@ public class ItemTrackerPanel extends PluginPanel
 			return;
 
 		int choice = JOptionPane.showConfirmDialog(
-				ItemTrackerPanel.this,
+				StockpilePanel.this,
 				"Clear the entire collection log for this item?",
 				"Clear Collection Log",
 				JOptionPane.YES_NO_OPTION,

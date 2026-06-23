@@ -1,11 +1,10 @@
 <p align="center">
-  <img src="icon.png" alt="Item Tracker icon" width="96" height="96">
+  <img src="banner.png" alt="Stockpile banner">
 </p>
-
-<h1 align="center">Item Tracker</h1>
+<h1 align="center">Stockpile</h1>
 
 A RuneLite plugin for tracking the quantity, value, and profitability of the
-items you gather, produce, or trade. Item Tracker pairs live Grand Exchange /
+items you gather, produce, or trade. Stockpile pairs live Grand Exchange /
 wiki pricing with a cost-basis profit model and an in-panel charting suite, so
 you can see at a glance what your tracked items are worth and how much you have
 actually made.

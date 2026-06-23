@@ -91,11 +91,11 @@ import java.util.concurrent.TimeUnit;
  * executor.
  */
 @PluginDescriptor(
-		name = "Item Tracker",
+		name = "Stockpile",
 		description = "Track item quantities across your inventory and bank with live GE prices",
 		tags = {"items", "bank", "inventory", "price", "ge", "tracker"}
 )
-public class ItemTrackerPlugin extends Plugin
+public class StockpilePlugin extends Plugin
 {
 	@Inject
 	private Client client;
@@ -110,7 +110,7 @@ public class ItemTrackerPlugin extends Plugin
 	private ClientToolbar clientToolbar;
 
 	@Inject
-	private ItemTrackerConfig config;
+	private StockpileConfig config;
 
 	@Inject
 	private ConfigManager configManager;
@@ -131,10 +131,10 @@ public class ItemTrackerPlugin extends Plugin
 	private OverlayManager overlayManager;
 
 	@Inject
-	private ItemTrackerHighlightOverlay highlightOverlay;
+	private StockpileHighlightOverlay highlightOverlay;
 
 	@Inject
-	private ItemTrackerGroundOverlay groundOverlay;
+	private StockpileGroundOverlay groundOverlay;
 
 	private static final int[] RUNE_POUCH_TYPE_VARBITS = {
 			VarbitID.RUNE_POUCH_TYPE_1, VarbitID.RUNE_POUCH_TYPE_2, VarbitID.RUNE_POUCH_TYPE_3,
@@ -184,7 +184,7 @@ public class ItemTrackerPlugin extends Plugin
 
 	private final Map<TileItem, Tile> groundItems = new HashMap<>();
 
-	private ItemTrackerPanel panel;
+	private StockpilePanel panel;
 	private NavigationButton navButton;
 	private ScheduledFuture<?> priceRefreshTask;
 	private Instant lastPriceRefresh = null;
@@ -202,7 +202,7 @@ public class ItemTrackerPlugin extends Plugin
 	@Override
 	protected void startUp() throws Exception
 	{
-		panel = new ItemTrackerPanel(
+		panel = new StockpilePanel(
 				itemManager,
 				config,
 				this::addTrackedItem,
@@ -217,7 +217,7 @@ public class ItemTrackerPlugin extends Plugin
 		final BufferedImage icon = ImageUtil.loadImageResource(getClass(), "icon.png");
 
 		navButton = NavigationButton.builder()
-				.tooltip("Item Tracker")
+				.tooltip("Stockpile")
 				.icon(icon)
 				.priority(6)
 				.panel(panel)
@@ -266,9 +266,9 @@ public class ItemTrackerPlugin extends Plugin
 	}
 
 	@Provides
-	ItemTrackerConfig provideConfig(ConfigManager configManager)
+	StockpileConfig provideConfig(ConfigManager configManager)
 	{
-		return configManager.getConfig(ItemTrackerConfig.class);
+		return configManager.getConfig(StockpileConfig.class);
 	}
 
 	/** (Re)schedules the recurring GE price refresh at the configured rate (min 30s), replacing any prior task. */
@@ -300,7 +300,7 @@ public class ItemTrackerPlugin extends Plugin
 	private void loadPersistedItems()
 	{
 		String saved = configManager.getRSProfileConfiguration(
-				ItemTrackerConfig.GROUP, ItemTrackerConfig.KEY_TRACKED_ITEMS);
+				StockpileConfig.GROUP, StockpileConfig.KEY_TRACKED_ITEMS);
 		if (saved == null || saved.trim().isEmpty())
 			return;
 
@@ -344,7 +344,7 @@ public class ItemTrackerPlugin extends Plugin
 		}
 
 		configManager.setRSProfileConfiguration(
-				ItemTrackerConfig.GROUP, ItemTrackerConfig.KEY_TRACKED_ITEMS, gson.toJson(list, PERSIST_TYPE));
+				StockpileConfig.GROUP, StockpileConfig.KEY_TRACKED_ITEMS, gson.toJson(list, PERSIST_TYPE));
 	}
 
 	/** Tracks an item by id with defaults (full tracking mode, no preset cost basis). */
@@ -642,7 +642,7 @@ public class ItemTrackerPlugin extends Plugin
 	@Subscribe
 	public void onConfigChanged(ConfigChanged event)
 	{
-		if (!ItemTrackerConfig.GROUP.equals(event.getGroup()))
+		if (!StockpileConfig.GROUP.equals(event.getGroup()))
 			return;
 
 		if (SECTION_SLOT_KEYS.contains(event.getKey()))
@@ -660,9 +660,9 @@ public class ItemTrackerPlugin extends Plugin
 
 		switch (event.getKey())
 		{
-			case ItemTrackerConfig.KEY_TRACKED_ITEMS:
+			case StockpileConfig.KEY_TRACKED_ITEMS:
 				return;
-			case ItemTrackerConfig.KEY_PRICE_REFRESH_SECONDS:
+			case StockpileConfig.KEY_PRICE_REFRESH_SECONDS:
 				scheduleRefresh();
 				return;
 			default:
@@ -671,15 +671,15 @@ public class ItemTrackerPlugin extends Plugin
 	}
 
 	private static final java.util.Set<String> SECTION_SLOT_KEYS = java.util.Set.of(
-			ItemTrackerConfig.KEY_SHOW_ITEM_VALUES,
-			ItemTrackerConfig.KEY_SHOW_COLLECTION_VALUES,
-			ItemTrackerConfig.KEY_SHOW_MARKET_INFO,
-			ItemTrackerConfig.KEY_SHOW_PRICE_OVERVIEW,
-			ItemTrackerConfig.KEY_SHOW_PRICE_GRAPH,
-			ItemTrackerConfig.KEY_SHOW_VOLUME_GRAPH,
-			ItemTrackerConfig.KEY_SHOW_ALCH_INFO,
-			ItemTrackerConfig.KEY_SHOW_NOTIFICATIONS,
-			ItemTrackerConfig.KEY_SHOW_ITEM_LOG);
+			StockpileConfig.KEY_SHOW_ITEM_VALUES,
+			StockpileConfig.KEY_SHOW_COLLECTION_VALUES,
+			StockpileConfig.KEY_SHOW_MARKET_INFO,
+			StockpileConfig.KEY_SHOW_PRICE_OVERVIEW,
+			StockpileConfig.KEY_SHOW_PRICE_GRAPH,
+			StockpileConfig.KEY_SHOW_VOLUME_GRAPH,
+			StockpileConfig.KEY_SHOW_ALCH_INFO,
+			StockpileConfig.KEY_SHOW_NOTIFICATIONS,
+			StockpileConfig.KEY_SHOW_ITEM_LOG);
 
 	/**
 	 * Keeps detail-section slots unique: when a section is moved to a slot already
@@ -710,10 +710,10 @@ public class ItemTrackerPlugin extends Plugin
 				continue;
 
 			SectionSlot other = configManager.getConfiguration(
-					ItemTrackerConfig.GROUP, key, SectionSlot.class);
+					StockpileConfig.GROUP, key, SectionSlot.class);
 			if (other == newSlot)
 			{
-				configManager.setConfiguration(ItemTrackerConfig.GROUP, key, oldSlot);
+				configManager.setConfiguration(StockpileConfig.GROUP, key, oldSlot);
 				return true;
 			}
 		}
@@ -1547,7 +1547,7 @@ public class ItemTrackerPlugin extends Plugin
 		}
 	}
 
-	/** Builds the user-facing notification message, e.g. {@code "Item Tracker: Coal - High >= 200"}. */
+	/** Builds the user-facing notification message, e.g. {@code "Stockpile: Coal - High >= 200"}. */
 	private String notificationText(TrackedItem item, NotificationRule rule)
 	{
 		NotificationMetric metric = rule.getMetric();
@@ -1567,7 +1567,7 @@ public class ItemTrackerPlugin extends Plugin
 					: rule.getValue();
 		}
 
-		return "Item Tracker: " + item.getName() + " - " + metric.getDisplayName()
+		return "Stockpile: " + item.getName() + " - " + metric.getDisplayName()
 				+ " " + rule.getOperation().getSymbol() + " " + valueDisplay;
 	}
 }

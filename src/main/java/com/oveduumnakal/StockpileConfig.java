@@ -33,7 +33,7 @@ import net.runelite.client.config.Notification;
 import net.runelite.client.config.Range;
 
 /**
- * RuneLite configuration for the Item Tracker plugin.
+ * RuneLite configuration for the Stockpile plugin.
  *
  * <p>Defines every user-facing setting as a defaulted {@code @ConfigItem}
  * accessor, grouped into five {@code @ConfigSection}s: main view, tracked-item
@@ -43,10 +43,10 @@ import net.runelite.client.config.Range;
  * group. Each accessor's behavior is described by its annotation; the per-item
  * {@code name}/{@code description} are the source of truth shown in the UI.
  */
-@ConfigGroup(ItemTrackerConfig.GROUP)
-public interface ItemTrackerConfig extends Config
+@ConfigGroup(StockpileConfig.GROUP)
+public interface StockpileConfig extends Config
 {
-	String GROUP = "itemtracker";
+	String GROUP = "stockpile";
 
 	String KEY_TRACKED_ITEMS = "trackedItemIds";
 

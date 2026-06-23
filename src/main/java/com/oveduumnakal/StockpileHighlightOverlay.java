@@ -43,14 +43,14 @@ import net.runelite.client.ui.overlay.WidgetItemOverlay;
  * by the plugin's pulsing breathing alpha. Skips rendering when inventory/bank
  * highlighting is disabled in config.
  */
-public class ItemTrackerHighlightOverlay extends WidgetItemOverlay
+public class StockpileHighlightOverlay extends WidgetItemOverlay
 {
-	private final ItemTrackerPlugin plugin;
-	private final ItemTrackerConfig config;
+	private final StockpilePlugin plugin;
+	private final StockpileConfig config;
 	private final ItemManager itemManager;
 
 	@Inject
-	ItemTrackerHighlightOverlay(ItemTrackerPlugin plugin, ItemTrackerConfig config, ItemManager itemManager)
+	StockpileHighlightOverlay(StockpilePlugin plugin, StockpileConfig config, ItemManager itemManager)
 	{
 		this.plugin = plugin;
 		this.config = config;

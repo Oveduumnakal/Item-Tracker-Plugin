@@ -47,15 +47,15 @@ import net.runelite.client.ui.overlay.OverlayPosition;
  * highlight color &ndash; pulsing via the plugin's breathing alpha. Does nothing
  * when ground highlighting is disabled in config.
  */
-public class ItemTrackerGroundOverlay extends Overlay
+public class StockpileGroundOverlay extends Overlay
 {
 	private final Client client;
-	private final ItemTrackerPlugin plugin;
-	private final ItemTrackerConfig config;
+	private final StockpilePlugin plugin;
+	private final StockpileConfig config;
 	private final ItemManager itemManager;
 
 	@Inject
-	ItemTrackerGroundOverlay(Client client, ItemTrackerPlugin plugin, ItemTrackerConfig config, ItemManager itemManager)
+	StockpileGroundOverlay(Client client, StockpilePlugin plugin, StockpileConfig config, ItemManager itemManager)
 	{
 		this.client = client;
 		this.plugin = plugin;

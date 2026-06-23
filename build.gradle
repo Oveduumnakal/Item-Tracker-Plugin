@@ -14,7 +14,7 @@ repositories {
 }
 
 def runeLiteVersion = 'latest.release'
-def pluginMainClass = 'com.oveduumnakal.ItemTrackerPluginTest'
+def pluginMainClass = 'com.oveduumnakal.StockpilePluginTest'
 
 dependencies {
 	compileOnly group: 'net.runelite', name:'client', version: runeLiteVersion

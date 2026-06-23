@@ -47,7 +47,7 @@ public class WikiRealtimePriceClient
 	private static final HttpUrl MAPPING_URL = HttpUrl.parse(
 			"https://prices.runescape.wiki/api/v1/osrs/mapping");
 
-	private static final String USER_AGENT = "RuneLite ItemTracker Plugin";
+	private static final String USER_AGENT = "RuneLite Stockpile Plugin";
 
 	/** The latest instant-buy ({@code high}) and instant-sell ({@code low}) prices for one item. */
 	@Value
