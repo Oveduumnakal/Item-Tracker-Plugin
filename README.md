@@ -54,9 +54,8 @@ actually made.
 
 ## Links
 
-- [Report a bug](https://github.com/Oveduumnakal/Item-Tracker-Plugin/issues/new?labels=bug)
-- [Request a feature](https://github.com/Oveduumnakal/Item-Tracker-Plugin/issues/new?labels=enhancement)
-- [Buy me a coffee](https://buymeacoffee.com/oveduumnakal)
+- [Report a bug](https://github.com/Oveduumnakal/Item-Tracker-Plugin/issues/new?template=bug_report.yml)
+- [Request a feature](https://github.com/Oveduumnakal/Item-Tracker-Plugin/issues/new?template=feature_request.yml)
 
 ## Building / running
 

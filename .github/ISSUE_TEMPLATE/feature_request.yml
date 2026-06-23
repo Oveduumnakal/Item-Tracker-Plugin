@@ -1,0 +1,73 @@
+name: Feature Request
+description: Suggest an idea or enhancement for the Stockpile plugin
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting an improvement! Please describe your idea below.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight checklist
+      options:
+        - label: I searched existing issues and this feature hasn't already been requested.
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or motivation
+      description: >
+        Is your request related to a problem or limitation? Describe what you're
+        trying to do and what gets in the way. E.g. "I'm always frustrated when..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: A clear and concise description of what you want to happen.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Related area
+      description: Which part of the plugin would this affect? (Select all that apply.)
+      multiple: true
+      options:
+        - Item tracking (adding / auto-add / consolidation / collection log)
+        - Live pricing (GE / wiki realtime / time-window values)
+        - Profit tracking (cost basis / acquisitions / portfolio total)
+        - Detail view & charts (graphs, timeframes, pop-out windows)
+        - Notifications / price alerts
+        - Panel / overlays (ground or inventory highlights)
+        - Configuration / settings
+        - New / other
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any alternative solutions or workarounds you've thought about or currently use.
+
+  - type: textarea
+    id: mockup
+    attributes:
+      label: Mockups or examples
+      description: >
+        Optional — screenshots, sketches, or examples from other plugins/tools
+        that illustrate the idea.
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Anything else that would help explain or justify the request.

@@ -1,0 +1,139 @@
+name: Bug Report
+description: Report a problem with the Stockpile plugin
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug! The more detail you give, the faster it can be fixed.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight checklist
+      options:
+        - label: I searched existing issues and this isn't a duplicate.
+          required: true
+        - label: I'm on the latest version of the plugin and RuneLite.
+          required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the bug
+      description: A clear and concise description of what the bug is.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: How can the problem be triggered?
+      placeholder: |
+        1. Go to '...'
+        2. Click on '...'
+        3. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What actually happened?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      description: Which part of the plugin is affected? (Select all that apply.)
+      multiple: true
+      options:
+        - Item tracking (adding / auto-add / consolidation / collection log)
+        - Live pricing (GE / wiki realtime / time-window values)
+        - Profit tracking (cost basis / acquisitions / portfolio total)
+        - Detail view & charts (graphs, timeframes, pop-out windows)
+        - Notifications / price alerts
+        - Panel / overlays (ground or inventory highlights)
+        - Configuration / settings
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: items
+    attributes:
+      label: Tracked item(s) involved
+      description: >
+        If the bug is specific to certain items, list them (name and/or item ID).
+        For a value or profit issue, include the quantity and recorded acquisition price.
+      placeholder: "e.g. Yew logs (ID 1515), qty 1000, recorded at 280 ea"
+
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Plugin version
+      placeholder: "1.2"
+    validations:
+      required: true
+
+  - type: input
+    id: runelite-version
+    attributes:
+      label: RuneLite version
+      description: Configuration > About, or shown by the launcher.
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "Windows 11 / macOS 14 / Linux"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: game-mode
+    attributes:
+      label: Game mode
+      options:
+        - Fixed
+        - Resizable classic
+        - Resizable modern
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: >
+        From `~/.runelite/logs/client.log`
+        (Windows: `%USERPROFILE%\.runelite\logs\client.log`).
+        Please remove any account or personal information first.
+      render: text
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots
+      description: If applicable, add screenshots of the panel, chart, or config.
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: >
+        Anything else that helps — does it happen every time, only after a
+        certain action, or did it start after an update?

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions & ideas (Discussions)
+    url: https://github.com/Oveduumnakal/Item-Tracker-Plugin/discussions
+    about: For open-ended questions or to discuss an idea before filing a request.
+  - name: Buy me a coffee
+    url: https://buymeacoffee.com/oveduumnakal
+    about: Support development of the plugin.
