@@ -172,6 +172,9 @@ public class StockpilePlugin extends Plugin
 
 	private final Map<Integer, TrackedItem> trackedItems = new LinkedHashMap<>();
 
+	/** Transient, non-persisted item backing the read-only detail preview (view-only button); not in {@link #trackedItems}. */
+	private TrackedItem previewItem;
+
 	private final Map<Integer, Map<Integer, Integer>> containerCounts = new HashMap<>();
 
 	private final Map<Integer, Integer> runePouchCounts = new HashMap<>();
@@ -355,7 +358,46 @@ public class StockpilePlugin extends Plugin
 
 	private void addTrackedItem(int itemId, TrackItemMode mode)
 	{
+		if (mode == TrackItemMode.VIEW)
+		{
+			previewItem(itemId);
+			return;
+		}
+
 		addTrackedItem(itemId, 0, null, null, false, false, true, mode);
+	}
+
+	/**
+	 * Opens a read-only detail preview for an untracked item without adding it to
+	 * the tracked list or persisting anything. Builds a transient {@link TrackedItem},
+	 * shows it in the detail view, then fetches its prices and history in the
+	 * background. Runs on the client thread.
+	 */
+	private void previewItem(int itemId)
+	{
+		clientThread.invokeLater(() ->
+		{
+			var composition = itemManager.getItemComposition(itemId);
+			TrackedItem preview = new TrackedItem(itemId, composition.getName());
+			preview.setTradeable(composition.isTradeable());
+			preview.setMode(TrackItemMode.VIEW);
+			applyItemMetadata(preview);
+			previewItem = preview;
+
+			SwingUtilities.invokeLater(() -> panel.showPreview(preview));
+			requestDetailData(itemId);
+			refreshGePrices();
+		});
+	}
+
+	/** @return the tracked item for {@code itemId}, or the transient preview item when it matches; otherwise {@code null}. */
+	private TrackedItem lookupItem(int itemId)
+	{
+		TrackedItem tracked = trackedItems.get(itemId);
+		if (tracked == null && previewItem != null && previewItem.getItemId() == itemId)
+			return previewItem;
+
+		return tracked;
 	}
 
 	private void addTrackedItem(int itemId, int initialQuantity, List<AcquisitionRecord> records, boolean costBasisInitialized)
@@ -465,7 +507,7 @@ public class StockpilePlugin extends Plugin
 			List<WikiRealtimePriceClient.PricePoint> s24 = wikiPriceClient.fetchTimeseries(itemId, "24h");
 			clientThread.invokeLater(() ->
 			{
-				TrackedItem tracked = trackedItems.get(itemId);
+				TrackedItem tracked = lookupItem(itemId);
 				if (tracked == null)
 					return;
 
@@ -579,23 +621,7 @@ public class StockpilePlugin extends Plugin
 			WikiRealtimePriceClient.ItemPrices prices = all.get(item.getItemId());
 			if (prices != null)
 			{
-				if (item.hasPrices())
-				{
-					item.setHighDelta(Long.compare(prices.getHigh(), item.getHighPrice()));
-					item.setLowDelta(Long.compare(prices.getLow(), item.getLowPrice()));
-					item.setAvgDelta(Long.compare(prices.avg(), item.getAvgPrice()));
-					item.setPrevHighPrice(item.getHighPrice());
-					item.setPrevLowPrice(item.getLowPrice());
-					item.setPrevAvgPrice(item.getAvgPrice());
-					item.setHasDeltas(true);
-				}
-
-				item.setHighPrice(prices.getHigh());
-				item.setLowPrice(prices.getLow());
-				item.setAvgPrice(prices.avg());
-				item.setPriceLoadFailed(false);
-				item.getWindowStats().put(TimeWindow.LIVE,
-						new PriceStats(prices.getHigh(), prices.getLow(), prices.avg(), 0));
+				applyLivePrices(item, prices);
 
 				if (!item.isCostBasisInitialized())
 				{
@@ -608,6 +634,13 @@ public class StockpilePlugin extends Plugin
 			}
 			else if (!item.hasPrices() && item.isTradeable())
 				item.setPriceLoadFailed(true);
+		}
+
+		if (previewItem != null)
+		{
+			WikiRealtimePriceClient.ItemPrices prices = all.get(previewItem.getItemId());
+			if (prices != null)
+				applyLivePrices(previewItem, prices);
 		}
 
 		if (fetchFailed)
@@ -632,6 +665,32 @@ public class StockpilePlugin extends Plugin
 					requestSeries(item.getItemId(), false);
 			}
 		}
+
+		if (previewItem != null && previewItem.getItemId() == detailId
+				&& previewItem.isTradeable() && previewItem.hasPrices())
+			requestDetailData(previewItem.getItemId());
+	}
+
+	/** Applies a freshly fetched price set to an item: records per-side deltas, updates current prices, and refreshes its LIVE window stats. */
+	private void applyLivePrices(TrackedItem item, WikiRealtimePriceClient.ItemPrices prices)
+	{
+		if (item.hasPrices())
+		{
+			item.setHighDelta(Long.compare(prices.getHigh(), item.getHighPrice()));
+			item.setLowDelta(Long.compare(prices.getLow(), item.getLowPrice()));
+			item.setAvgDelta(Long.compare(prices.avg(), item.getAvgPrice()));
+			item.setPrevHighPrice(item.getHighPrice());
+			item.setPrevLowPrice(item.getLowPrice());
+			item.setPrevAvgPrice(item.getAvgPrice());
+			item.setHasDeltas(true);
+		}
+
+		item.setHighPrice(prices.getHigh());
+		item.setLowPrice(prices.getLow());
+		item.setAvgPrice(prices.avg());
+		item.setPriceLoadFailed(false);
+		item.getWindowStats().put(TimeWindow.LIVE,
+				new PriceStats(prices.getHigh(), prices.getLow(), prices.avg(), 0));
 	}
 
 	/**
@@ -949,6 +1008,7 @@ public class StockpilePlugin extends Plugin
 				break;
 			case LOGGED_IN:
 				trackedItems.clear();
+				previewItem = null;
 				containerCounts.clear();
 				runePouchCounts.clear();
 				seenContainersSinceLogin.clear();

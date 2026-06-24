@@ -136,6 +136,9 @@ public class StockpilePanel extends PluginPanel
 	private final Map<Integer, ImageIcon> rowIconCache = new HashMap<>();
 	private int detailItemId = -1;
 
+	/** A transient, read-only item shown in the detail view via {@link #showPreview} but never added to the tracked list. */
+	private TrackedItem previewItem;
+
 	private final JPanel detailCard = new JPanel(new BorderLayout(0, 8));
 	private final JLabel detailIconLabel = new JLabel();
 	private final JLabel detailNameLabel = new JLabel();
@@ -872,8 +875,14 @@ public class StockpilePanel extends PluginPanel
 		if (detailItemId > 0)
 		{
 			TrackedItem detail = currentItems.get(detailItemId);
+			if (detail == null && previewItem != null && previewItem.getItemId() == detailItemId)
+				detail = previewItem;
+
 			if (detail != null)
-				SwingUtilities.invokeLater(() -> populateDetail(detail));
+			{
+				final TrackedItem shown = detail;
+				SwingUtilities.invokeLater(() -> populateDetail(shown));
+			}
 			else if (!currentItems.isEmpty())
 			{
 
@@ -2148,6 +2157,9 @@ public class StockpilePanel extends PluginPanel
 			return;
 
 		TrackedItem item = currentItems.get(itemId);
+		if (item == null && previewItem != null && previewItem.getItemId() == itemId)
+			item = previewItem;
+
 		if (item != null)
 			populateDetail(item);
 	}
@@ -3022,6 +3034,7 @@ public class StockpilePanel extends PluginPanel
 		if (item == null)
 			return;
 
+		previewItem = null;
 		detailItemId = itemId;
 		populateDetail(item);
 		footerPanel.setVisible(false);
@@ -3030,10 +3043,25 @@ public class StockpilePanel extends PluginPanel
 			onRequestDetailData.accept(itemId);
 	}
 
+	/**
+	 * Opens a read-only preview of an untracked item in the detail view. Unlike
+	 * {@link #showDetail}, the item is not in the tracked list; the plugin supplies
+	 * its price/history data directly and the tracked-only sections stay hidden.
+	 */
+	public void showPreview(TrackedItem item)
+	{
+		previewItem = item;
+		detailItemId = item.getItemId();
+		populateDetail(item);
+		footerPanel.setVisible(false);
+		cardLayout.show(cardsHost, CARD_DETAIL);
+	}
+
 	/** Returns to the main item list, closing any open pop-outs. */
 	private void showMain()
 	{
 		detailItemId = -1;
+		previewItem = null;
 		closePopouts();
 		footerPanel.setVisible(true);
 		cardLayout.show(cardsHost, CARD_MAIN);
@@ -3064,6 +3092,7 @@ public class StockpilePanel extends PluginPanel
 	 */
 	private void populateDetail(TrackedItem item)
 	{
+		final boolean viewOnly = item.getMode() == TrackItemMode.VIEW;
 
 		rebuildOverviewGrid();
 		applyDetailSectionLayout();
@@ -3075,6 +3104,7 @@ public class StockpilePanel extends PluginPanel
 		int detailQty = item.getQuantity();
 		detailQtyLabel.setText("Qty: " + GpFormat.shortValue(detailQty));
 		detailQtyLabel.setToolTipText(NUMBER_FORMAT.format(detailQty));
+		detailQtyLabel.setVisible(!viewOnly);
 
 		final boolean hasPrices = item.hasPrices();
 		final ValueFormat full = ValueFormat.FULL;
@@ -3150,7 +3180,7 @@ public class StockpilePanel extends PluginPanel
 					+ "<br>= " + signedGp(estProfit) + "</html>");
 		}
 
-		if (item.getNotifications().isEmpty())
+		if (!viewOnly && item.getNotifications().isEmpty())
 		{
 			for (int i = 0; i < DEFAULT_NOTIFICATION_ROWS; i++)
 				item.getNotifications().add(new NotificationRule());
@@ -3159,21 +3189,22 @@ public class StockpilePanel extends PluginPanel
 			notifyNotificationsEdited();
 		}
 
-		if (!notificationsTable.isEditing())
+		if (!viewOnly && !notificationsTable.isEditing())
 		{
 			notificationsModel.setItem(item);
 			applyNotificationRenderers();
 			notificationsTable.revalidate();
 		}
 
-		if (!acquisitionsTable.isEditing())
+		if (!viewOnly && !acquisitionsTable.isEditing())
 		{
 			acquisitionsModel.setItem(item);
 			applyTableRenderers();
 			acquisitionsTable.revalidate();
 		}
 
-		acquisitionsSection.setVisible(item.getMode() != TrackItemMode.VIEW);
+		notificationsSection.setVisible(!viewOnly);
+		acquisitionsSection.setVisible(!viewOnly);
 		updateAcqPopoutButton();
 
 		if (acqPopoutModel != null)
