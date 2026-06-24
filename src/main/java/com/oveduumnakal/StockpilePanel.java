@@ -780,7 +780,7 @@ public class StockpilePanel extends PluginPanel
 		nameLabel.setForeground(Color.WHITE);
 		nameLabel.setFont(FontManager.getRunescapeSmallFont());
 
-		JButton viewBtn = new JButton("👁");
+		JButton viewBtn = new JButton(buildEyeIcon(14));
 		viewBtn.setPreferredSize(new Dimension(28, 22));
 		viewBtn.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 		viewBtn.setForeground(Color.WHITE);
@@ -2957,6 +2957,20 @@ public class StockpilePanel extends PluginPanel
 		g.fillPolygon(xs, ys, xs.length);
 		g.dispose();
 		return new ImageIcon(img);
+	}
+
+	/** Loads the bundled {@code eye.png} scaled to a square icon for the view-only button. */
+	private Icon buildEyeIcon(int size)
+	{
+		try
+		{
+			BufferedImage img = net.runelite.client.util.ImageUtil.loadImageResource(getClass(), "eye.png");
+			return new ImageIcon(img.getScaledInstance(size, size, Image.SCALE_SMOOTH));
+		}
+		catch (Exception ex)
+		{
+			return new ImageIcon(new BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB));
+		}
 	}
 
 	private Icon buildBrushIcon()
