@@ -785,7 +785,8 @@ public class StockpilePanel extends PluginPanel
 		viewBtn.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 		viewBtn.setForeground(Color.WHITE);
 		viewBtn.setFocusPainted(false);
-		viewBtn.setBorderPainted(false);
+		viewBtn.setBorderPainted(true);
+		viewBtn.setBorder(BorderFactory.createLineBorder(ColorScheme.LIGHT_GRAY_COLOR));
 		viewBtn.setToolTipText("View prices only");
 		viewBtn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 		viewBtn.addActionListener(e ->
@@ -795,12 +796,14 @@ public class StockpilePanel extends PluginPanel
 			searchResultsPanel.setVisible(false);
 		});
 
+		Color addGreen = new Color(0, 153, 0);
 		JButton addBtn = new JButton("+");
 		addBtn.setPreferredSize(new Dimension(28, 22));
-		addBtn.setBackground(new Color(0, 153, 0));
-		addBtn.setForeground(Color.WHITE);
+		addBtn.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		addBtn.setForeground(addGreen);
 		addBtn.setFocusPainted(false);
-		addBtn.setBorderPainted(false);
+		addBtn.setBorderPainted(true);
+		addBtn.setBorder(BorderFactory.createLineBorder(addGreen));
 		addBtn.setToolTipText("Track item");
 		addBtn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 		addBtn.addActionListener(e ->
