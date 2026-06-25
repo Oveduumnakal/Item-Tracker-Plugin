@@ -343,10 +343,14 @@ public class StockpilePanel extends PluginPanel
 		setBorder(new EmptyBorder(10, 10, 10, 10));
 		setBackground(ColorScheme.DARK_GRAY_COLOR);
 
-		JLabel title = new JLabel("Stockpile");
+		JLabel title = new JLabel("Stockpile", SwingConstants.CENTER);
 		title.setForeground(Color.WHITE);
 		title.setFont(FontManager.getRunescapeBoldFont());
 		title.setBorder(new EmptyBorder(0, 0, 4, 0));
+
+		JPanel titleWrapper = new JPanel(new BorderLayout());
+		titleWrapper.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		titleWrapper.add(title, BorderLayout.CENTER);
 
 		searchResultsPanel = new JPanel();
 		searchResultsPanel.setLayout(new BoxLayout(searchResultsPanel, BoxLayout.Y_AXIS));
@@ -467,7 +471,7 @@ public class StockpilePanel extends PluginPanel
 		JPanel topPanel = new JPanel();
 		topPanel.setLayout(new BoxLayout(topPanel, BoxLayout.Y_AXIS));
 		topPanel.setBackground(ColorScheme.DARK_GRAY_COLOR);
-		topPanel.add(title);
+		topPanel.add(titleWrapper);
 		topPanel.add(searchField);
 		topPanel.add(Box.createVerticalStrut(4));
 		topPanel.add(searchResultsPanel);
