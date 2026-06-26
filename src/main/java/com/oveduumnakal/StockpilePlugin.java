@@ -226,7 +226,8 @@ public class StockpilePlugin extends Plugin
 				this::clearAcquisitions,
 				this::onNotificationsEdited,
 				this::clearAllTrackedItems,
-				this::examineFor
+				this::examineFor,
+				this::reorderTrackedItem
 		);
 
 		final BufferedImage icon = ImageUtil.loadImageResource(getClass(), "icon.png");
@@ -546,6 +547,42 @@ public class StockpilePlugin extends Plugin
 		clientThread.invokeLater(() ->
 		{
 			trackedItems.remove(itemId);
+			persistTrackedItems();
+			refreshPanel();
+		});
+	}
+
+	/**
+	 * Moves a tracked item to a new position in the list, persisting the new order so it
+	 * survives restarts. {@code targetIndex} is clamped to the list bounds; a no-op if the
+	 * item is unknown or already at that position. Runs on the client thread.
+	 */
+	private void reorderTrackedItem(int itemId, int targetIndex)
+	{
+		clientThread.invokeLater(() ->
+		{
+			List<TrackedItem> ordered = new ArrayList<>(trackedItems.values());
+
+			int from = -1;
+			for (int i = 0; i < ordered.size(); i++)
+				if (ordered.get(i).getItemId() == itemId)
+				{
+					from = i;
+					break;
+				}
+
+			if (from < 0)
+				return;
+
+			int to = Math.max(0, Math.min(targetIndex, ordered.size() - 1));
+			if (to == from)
+				return;
+
+			ordered.add(to, ordered.remove(from));
+
+			trackedItems.clear();
+			ordered.forEach(item -> trackedItems.put(item.getItemId(), item));
+
 			persistTrackedItems();
 			refreshPanel();
 		});

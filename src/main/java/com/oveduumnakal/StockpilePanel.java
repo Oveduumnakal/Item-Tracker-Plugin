@@ -113,6 +113,20 @@ public class StockpilePanel extends PluginPanel
 	private final Consumer<Integer> onNotificationsEdited;
 	private final Runnable onClearAll;
 	private final IntFunction<String> examineLookup;
+	/** Reorder callback: (itemId, targetIndex) — moves the item to a new position in the tracked list. */
+	private final BiConsumer<Integer, Integer> onReorder;
+
+	/** Item ids in current display order, kept in sync on each {@link #rebuild}, used to compute reorder targets. */
+	private final List<Integer> orderedItemIds = new ArrayList<>();
+
+	/** Whether the list is in reorder mode, which reveals the per-row drag/arrow strip. */
+	private boolean reorderMode = false;
+
+	/** The per-row reorder strips, tracked so reorder mode can show/hide them without a full rebuild. */
+	private final List<JComponent> reorderStrips = new ArrayList<>();
+
+	/** Header toggle that enters/exits reorder mode. */
+	private JLabel reorderToggle;
 
 	private final CardLayout cardLayout = new CardLayout();
 
@@ -288,6 +302,22 @@ public class StockpilePanel extends PluginPanel
 	private int hoveredItemId = -1;
 	private final Timer refreshAgeTimer;
 
+	/** Drag-reorder state. {@code dragItemId} is the item being dragged, or -1 when not dragging. */
+	private int dragItemId = -1;
+	/** The list index where the dragged item would be inserted on drop. */
+	private int dragInsertIndex = -1;
+	/** The y-coordinate (in {@link #trackedItemsPanel} space) at which to paint the drop indicator line. */
+	private int dragLineY = -1;
+	/** Edge-autoscroll timer active while a drag hovers near the viewport top/bottom. */
+	private Timer dragScrollTimer;
+	/** Autoscroll direction while dragging: -1 up, +1 down, 0 none. */
+	private int dragScrollDir = 0;
+	private static final Color DRAG_LINE_COLOR = new Color(255, 200, 0);
+	private static final int DRAG_SCROLL_MARGIN = 28;
+	private static final int DRAG_SCROLL_STEP = 12;
+	/** Client property on each row card holding its item id, used to map drag positions to list indices. */
+	private static final String ROW_ITEM_ID = "stockpileItemId";
+
 	private static final Color LOADING_COLOR = new Color(150, 150, 150);
 	private static final Color DESCRIPTION_COLOR = new Color(160, 160, 160);
 	private static final long LOADING_GLOW_PERIOD_MS = 2000;
@@ -339,6 +369,7 @@ public class StockpilePanel extends PluginPanel
 	 * @param onNotificationsEdited callback after notification rules are edited
 	 * @param onClearAll            callback to clear all tracked items
 	 * @param examineLookup         resolves an item id to its examine text, or {@code null}
+	 * @param onReorder             callback to move an item to a new index in the tracked list
 	 */
 	public StockpilePanel(
 			ItemManager itemManager,
@@ -350,7 +381,8 @@ public class StockpilePanel extends PluginPanel
 			Consumer<Integer> onClearAcquisitions,
 			Consumer<Integer> onNotificationsEdited,
 			Runnable onClearAll,
-			IntFunction<String> examineLookup)
+			IntFunction<String> examineLookup,
+			BiConsumer<Integer, Integer> onReorder)
 	{
 		this.itemManager = itemManager;
 		this.config = config;
@@ -362,6 +394,7 @@ public class StockpilePanel extends PluginPanel
 		this.onNotificationsEdited = onNotificationsEdited;
 		this.onClearAll = onClearAll;
 		this.examineLookup = examineLookup;
+		this.onReorder = onReorder;
 
 		setLayout(new BorderLayout(0, 8));
 		setBorder(new EmptyBorder(10, 10, 10, 10));
@@ -395,7 +428,19 @@ public class StockpilePanel extends PluginPanel
 			public void changedUpdate(DocumentEvent e) { onSearch(searchField.getText()); }
 		});
 
-		trackedItemsPanel = new JPanel();
+		trackedItemsPanel = new JPanel()
+		{
+			@Override
+			protected void paintChildren(Graphics g)
+			{
+				super.paintChildren(g);
+				if (dragItemId != -1 && dragLineY >= 0)
+				{
+					g.setColor(DRAG_LINE_COLOR);
+					g.fillRect(2, dragLineY - 1, getWidth() - 4, 2);
+				}
+			}
+		};
 		trackedItemsPanel.setLayout(new BoxLayout(trackedItemsPanel, BoxLayout.Y_AXIS));
 		trackedItemsPanel.setBackground(ColorScheme.DARK_GRAY_COLOR);
 
@@ -404,9 +449,25 @@ public class StockpilePanel extends PluginPanel
 		trackedLabel.setFont(FontManager.getRunescapeBoldFont());
 		trackedLabel.setBorder(new EmptyBorder(6, 0, 4, 0));
 
+		reorderToggle = new JLabel("⇅", SwingConstants.CENTER);
+		reorderToggle.setFont(FontManager.getRunescapeBoldFont());
+		reorderToggle.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+		reorderToggle.setBorder(new EmptyBorder(6, 0, 4, 6));
+		reorderToggle.setToolTipText("Reorder tracked items");
+		reorderToggle.addMouseListener(new MouseAdapter()
+		{
+			@Override
+			public void mouseClicked(MouseEvent e)
+			{
+				toggleReorderMode();
+			}
+		});
+		updateReorderToggle();
+
 		JPanel trackedLabelWrapper = new JPanel(new BorderLayout());
 		trackedLabelWrapper.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		trackedLabelWrapper.add(trackedLabel, BorderLayout.CENTER);
+		trackedLabelWrapper.add(reorderToggle, BorderLayout.EAST);
 
 		JPanel totalsPanel = new JPanel(new BorderLayout(6, 0));
 		totalsPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
@@ -891,10 +952,12 @@ public class StockpilePanel extends PluginPanel
 		this.lastPriceRefresh = newLastPriceRefresh;
 		trackedItemIds.clear();
 		currentItems.clear();
+		orderedItemIds.clear();
 		for (TrackedItem item : items)
 		{
 			trackedItemIds.add(item.getItemId());
 			currentItems.put(item.getItemId(), item);
+			orderedItemIds.add(item.getItemId());
 		}
 
 		rowIconCache.keySet().retainAll(trackedItemIds);
@@ -944,6 +1007,7 @@ public class StockpilePanel extends PluginPanel
 			loadingLabels.clear();
 			pulseEntries.clear();
 			clearButton.setEnabled(!trackedItemIds.isEmpty());
+			reorderStrips.clear();
 			totalHighDeltaLabel.setText("");
 			totalLowDeltaLabel.setText("");
 			totalAvgDeltaLabel.setText("");
@@ -1080,6 +1144,7 @@ public class StockpilePanel extends PluginPanel
 		};
 		card.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 		card.setBorder(new EmptyBorder(6, 8, 6, 8));
+		card.putClientProperty(ROW_ITEM_ID, item.getItemId());
 
 		JLabel iconLabel = new JLabel();
 		iconLabel.setVerticalAlignment(SwingConstants.CENTER);
@@ -1111,6 +1176,54 @@ public class StockpilePanel extends PluginPanel
 		removeBtn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 		removeBtn.setToolTipText("Remove from tracking");
 		removeBtn.addActionListener(e -> onRemoveItem.accept(item.getItemId()));
+
+		final int index = orderedItemIds.indexOf(item.getItemId());
+		final int count = orderedItemIds.size();
+		final boolean canUp = index > 0;
+		final boolean canDown = index >= 0 && index < count - 1;
+
+		final Color CONTROL_COLOR = new Color(150, 150, 150);
+		final Color CONTROL_DIM = new Color(80, 80, 80);
+
+		JButton upBtn = makeRowControl("▲", "Move up");
+		upBtn.setForeground(canUp ? CONTROL_COLOR : CONTROL_DIM);
+		upBtn.addActionListener(e ->
+		{
+			if (canUp && onReorder != null)
+				onReorder.accept(item.getItemId(), index - 1);
+		});
+
+		JButton downBtn = makeRowControl("▼", "Move down");
+		downBtn.setForeground(canDown ? CONTROL_COLOR : CONTROL_DIM);
+		downBtn.addActionListener(e ->
+		{
+			if (canDown && onReorder != null)
+				onReorder.accept(item.getItemId(), index + 1);
+		});
+
+		JLabel dragHandle = new JLabel("≡", SwingConstants.CENTER);
+		dragHandle.setPreferredSize(new Dimension(20, 20));
+		dragHandle.setForeground(CONTROL_COLOR);
+		dragHandle.setFont(FontManager.getRunescapeSmallFont());
+		dragHandle.setCursor(Cursor.getPredefinedCursor(Cursor.MOVE_CURSOR));
+		dragHandle.setToolTipText("Drag to reorder");
+		installDragHandle(dragHandle, item.getItemId());
+
+		JPanel reorderStrip = new JPanel();
+		reorderStrip.setLayout(new BoxLayout(reorderStrip, BoxLayout.Y_AXIS));
+		reorderStrip.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		reorderStrip.setBorder(new EmptyBorder(0, 0, 0, 6));
+		upBtn.setAlignmentX(Component.CENTER_ALIGNMENT);
+		downBtn.setAlignmentX(Component.CENTER_ALIGNMENT);
+		dragHandle.setAlignmentX(Component.CENTER_ALIGNMENT);
+		reorderStrip.add(Box.createVerticalGlue());
+		reorderStrip.add(upBtn);
+		reorderStrip.add(dragHandle);
+		reorderStrip.add(downBtn);
+		reorderStrip.add(Box.createVerticalGlue());
+		reorderStrip.setVisible(reorderMode);
+		reorderStrips.add(reorderStrip);
+		card.add(reorderStrip, BorderLayout.WEST);
 
 		JPanel eastPanel = new JPanel(new BorderLayout());
 		eastPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
@@ -1344,7 +1457,8 @@ public class StockpilePanel extends PluginPanel
 			@Override
 			public void mouseClicked(MouseEvent e)
 			{
-				if (e.getSource() == removeBtn)
+				if (e.getSource() == removeBtn || e.getSource() == upBtn
+						|| e.getSource() == downBtn || e.getSource() == dragHandle)
 					return;
 
 				showDetail(item.getItemId());
@@ -1373,6 +1487,210 @@ public class StockpilePanel extends PluginPanel
 		addListenerRecursively(card, hoverListener);
 
 		return card;
+	}
+
+	/** Toggles reorder mode, showing or hiding the per-row drag/arrow strips without a full rebuild. */
+	private void toggleReorderMode()
+	{
+		reorderMode = !reorderMode;
+		updateReorderToggle();
+
+		for (JComponent strip : reorderStrips)
+			strip.setVisible(reorderMode);
+
+		trackedItemsPanel.revalidate();
+		trackedItemsPanel.repaint();
+	}
+
+	/** Highlights the header reorder toggle when reorder mode is active. */
+	private void updateReorderToggle()
+	{
+		if (reorderToggle != null)
+			reorderToggle.setForeground(reorderMode ? COLOR_AVG : ColorScheme.LIGHT_GRAY_COLOR);
+	}
+
+	/** Builds a compact, hover-revealed glyph button styled like the row's remove button. */
+	private JButton makeRowControl(String glyph, String tooltip)
+	{
+		JButton btn = new JButton(glyph);
+		btn.setPreferredSize(new Dimension(20, 20));
+		btn.setMargin(new Insets(0, 0, 0, 0));
+		btn.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		btn.setFont(FontManager.getRunescapeSmallFont());
+		btn.setFocusPainted(false);
+		btn.setBorderPainted(false);
+		btn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+		btn.setToolTipText(tooltip);
+
+		return btn;
+	}
+
+	/**
+	 * Wires drag-to-reorder onto a row's drag handle: pressing starts the drag, dragging
+	 * updates the drop indicator and edge autoscroll, and releasing commits the move.
+	 */
+	private void installDragHandle(JLabel handle, int itemId)
+	{
+		MouseAdapter dragAdapter = new MouseAdapter()
+		{
+			@Override
+			public void mousePressed(MouseEvent e)
+			{
+				dragItemId = itemId;
+				updateDrag(e);
+			}
+
+			@Override
+			public void mouseDragged(MouseEvent e)
+			{
+				if (dragItemId != -1)
+					updateDrag(e);
+			}
+
+			@Override
+			public void mouseReleased(MouseEvent e)
+			{
+				commitDrag();
+			}
+		};
+
+		handle.addMouseListener(dragAdapter);
+		handle.addMouseMotionListener(dragAdapter);
+	}
+
+	/** Recomputes the drop target and autoscroll state for the current drag pointer, then repaints. */
+	private void updateDrag(MouseEvent e)
+	{
+		Point inPanel = SwingUtilities.convertPoint(e.getComponent(), e.getPoint(), trackedItemsPanel);
+		updateDropTarget(inPanel.y);
+		updateDragAutoscroll(e);
+		trackedItemsPanel.repaint();
+	}
+
+	/** Finds the list index where a drop at {@code yInPanel} would insert, and the indicator line position. */
+	private void updateDropTarget(int yInPanel)
+	{
+		int idx = 0;
+		int lastBottom = 0;
+		for (Component c : trackedItemsPanel.getComponents())
+		{
+			if (!(c instanceof JComponent))
+				continue;
+
+			Object id = ((JComponent) c).getClientProperty(ROW_ITEM_ID);
+			if (id == null)
+				continue;
+
+			Rectangle b = c.getBounds();
+			if (yInPanel < b.y + b.height / 2)
+			{
+				dragInsertIndex = idx;
+				dragLineY = b.y;
+				return;
+			}
+
+			idx++;
+			lastBottom = b.y + b.height;
+		}
+
+		dragInsertIndex = idx;
+		dragLineY = lastBottom;
+	}
+
+	/** Commits the in-progress drag to the reorder callback, converting the drop gap into a target index. */
+	private void commitDrag()
+	{
+		stopDragAutoscroll();
+
+		if (dragItemId == -1)
+			return;
+
+		int draggedId = dragItemId;
+		int from = orderedItemIds.indexOf(draggedId);
+		int gap = dragInsertIndex;
+
+		dragItemId = -1;
+		dragInsertIndex = -1;
+		dragLineY = -1;
+		trackedItemsPanel.repaint();
+
+		if (from < 0 || gap < 0 || onReorder == null)
+			return;
+
+		int target = gap <= from ? gap : gap - 1;
+		if (target == from)
+			return;
+
+		onReorder.accept(draggedId, target);
+	}
+
+	/** Starts/stops edge autoscroll based on whether the drag pointer is near the viewport's top or bottom. */
+	private void updateDragAutoscroll(MouseEvent e)
+	{
+		JViewport viewport = (JViewport) SwingUtilities.getAncestorOfClass(JViewport.class, trackedItemsPanel);
+		if (viewport == null)
+		{
+			stopDragAutoscroll();
+			return;
+		}
+
+		Point inViewport = SwingUtilities.convertPoint(e.getComponent(), e.getPoint(), viewport);
+		int height = viewport.getExtentSize().height;
+
+		int dir = 0;
+		if (inViewport.y < DRAG_SCROLL_MARGIN)
+			dir = -1;
+		else if (inViewport.y > height - DRAG_SCROLL_MARGIN)
+			dir = 1;
+
+		if (dir == 0)
+		{
+			stopDragAutoscroll();
+			return;
+		}
+
+		dragScrollDir = dir;
+		if (dragScrollTimer == null)
+		{
+			dragScrollTimer = new Timer(16, ev -> dragAutoscrollTick());
+			dragScrollTimer.start();
+		}
+	}
+
+	/** One autoscroll step: nudges the viewport in {@link #dragScrollDir} and recomputes the drop target. */
+	private void dragAutoscrollTick()
+	{
+		JViewport viewport = (JViewport) SwingUtilities.getAncestorOfClass(JViewport.class, trackedItemsPanel);
+		if (viewport == null || dragItemId == -1)
+		{
+			stopDragAutoscroll();
+			return;
+		}
+
+		Point pos = viewport.getViewPosition();
+		int maxY = Math.max(0, trackedItemsPanel.getHeight() - viewport.getExtentSize().height);
+		int newY = Math.max(0, Math.min(maxY, pos.y + dragScrollDir * DRAG_SCROLL_STEP));
+		if (newY == pos.y)
+			return;
+
+		viewport.setViewPosition(new Point(pos.x, newY));
+
+		Point mouse = MouseInfo.getPointerInfo().getLocation();
+		SwingUtilities.convertPointFromScreen(mouse, trackedItemsPanel);
+		updateDropTarget(mouse.y);
+		trackedItemsPanel.repaint();
+	}
+
+	/** Stops the edge-autoscroll timer, if running. */
+	private void stopDragAutoscroll()
+	{
+		if (dragScrollTimer != null)
+		{
+			dragScrollTimer.stop();
+			dragScrollTimer = null;
+		}
+
+		dragScrollDir = 0;
 	}
 
 	/** Attaches a mouse listener to a component and all its descendants, so a whole row reacts as one. */
