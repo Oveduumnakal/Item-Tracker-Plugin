@@ -71,6 +71,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
+import java.util.function.IntFunction;
 
 /**
  * The plugin's side panel and its entire Swing UI.
@@ -111,6 +112,7 @@ public class StockpilePanel extends PluginPanel
 	private final Consumer<Integer> onClearAcquisitions;
 	private final Consumer<Integer> onNotificationsEdited;
 	private final Runnable onClearAll;
+	private final IntFunction<String> examineLookup;
 
 	private final CardLayout cardLayout = new CardLayout();
 
@@ -160,6 +162,7 @@ public class StockpilePanel extends PluginPanel
 	private final JLabel detailIconLabel = new JLabel();
 	private final JLabel detailNameLabel = new JLabel();
 	private final JLabel detailQtyLabel = new JLabel();
+	private final JLabel detailDescriptionLabel = new JLabel();
 
 	private final JLabel icvHigh = new JLabel();
 	private final JLabel icvLow = new JLabel();
@@ -286,6 +289,7 @@ public class StockpilePanel extends PluginPanel
 	private final Timer refreshAgeTimer;
 
 	private static final Color LOADING_COLOR = new Color(150, 150, 150);
+	private static final Color DESCRIPTION_COLOR = new Color(160, 160, 160);
 	private static final long LOADING_GLOW_PERIOD_MS = 2000;
 	private static final float LOADING_GLOW_MIN_ALPHA = 0.2f;
 	private final List<JLabel> loadingLabels = new ArrayList<>();
@@ -334,6 +338,7 @@ public class StockpilePanel extends PluginPanel
 	 * @param onClearAcquisitions   callback to clear an item's acquisitions
 	 * @param onNotificationsEdited callback after notification rules are edited
 	 * @param onClearAll            callback to clear all tracked items
+	 * @param examineLookup         resolves an item id to its examine text, or {@code null}
 	 */
 	public StockpilePanel(
 			ItemManager itemManager,
@@ -344,7 +349,8 @@ public class StockpilePanel extends PluginPanel
 			Consumer<Integer> onRequestDetailData,
 			Consumer<Integer> onClearAcquisitions,
 			Consumer<Integer> onNotificationsEdited,
-			Runnable onClearAll)
+			Runnable onClearAll,
+			IntFunction<String> examineLookup)
 	{
 		this.itemManager = itemManager;
 		this.config = config;
@@ -355,6 +361,7 @@ public class StockpilePanel extends PluginPanel
 		this.onClearAcquisitions = onClearAcquisitions;
 		this.onNotificationsEdited = onNotificationsEdited;
 		this.onClearAll = onClearAll;
+		this.examineLookup = examineLookup;
 
 		setLayout(new BorderLayout(0, 8));
 		setBorder(new EmptyBorder(10, 10, 10, 10));
@@ -1609,6 +1616,11 @@ public class StockpilePanel extends PluginPanel
 		detailQtyLabel.setForeground(Color.WHITE);
 		detailQtyLabel.setFont(FontManager.getRunescapeSmallFont());
 
+		detailDescriptionLabel.setForeground(DESCRIPTION_COLOR);
+		detailDescriptionLabel.setFont(FontManager.getRunescapeSmallFont().deriveFont(Font.ITALIC));
+		detailDescriptionLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+		detailDescriptionLabel.setBorder(new EmptyBorder(8, 0, 0, 0));
+
 		JPanel titleTextStack = new JPanel();
 		titleTextStack.setLayout(new BoxLayout(titleTextStack, BoxLayout.Y_AXIS));
 		titleTextStack.setBackground(ColorScheme.DARK_GRAY_COLOR);
@@ -1637,6 +1649,7 @@ public class StockpilePanel extends PluginPanel
 		topStack.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		topStack.add(headerRow);
 		topStack.add(titleRow);
+		topStack.add(detailDescriptionLabel);
 
 		detailSectionsHost = new JPanel();
 		detailSectionsHost.setLayout(new BoxLayout(detailSectionsHost, BoxLayout.Y_AXIS));
@@ -3206,6 +3219,15 @@ public class StockpilePanel extends PluginPanel
 	 * current values, market info, the charts, the overview grid, alch figures,
 	 * notification rules, and the acquisitions log.
 	 */
+	/** Escapes the HTML-significant characters so examine text renders literally inside a wrapping HTML label. */
+	private static String escapeHtml(String text)
+	{
+		return text
+				.replace("&", "&amp;")
+				.replace("<", "&lt;")
+				.replace(">", "&gt;");
+	}
+
 	private void populateDetail(TrackedItem item)
 	{
 		final boolean viewOnly = item.getMode() == TrackItemMode.VIEW;
@@ -3221,6 +3243,14 @@ public class StockpilePanel extends PluginPanel
 		detailQtyLabel.setText("Qty: " + GpFormat.shortValue(detailQty));
 		detailQtyLabel.setToolTipText(NUMBER_FORMAT.format(detailQty));
 		detailQtyLabel.setVisible(!viewOnly);
+
+		final String examine = examineLookup == null ? null : examineLookup.apply(item.getItemId());
+		final boolean hasExamine = examine != null && !examine.isEmpty();
+		if (hasExamine)
+			detailDescriptionLabel.setText("<html><div style='width:" + (PluginPanel.PANEL_WIDTH - 40)
+					+ "px'>" + escapeHtml(examine) + "</div></html>");
+
+		detailDescriptionLabel.setVisible(hasExamine);
 
 		final boolean hasPrices = item.hasPrices();
 		final ValueFormat full = ValueFormat.FULL;
