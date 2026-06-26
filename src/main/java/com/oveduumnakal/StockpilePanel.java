@@ -119,13 +119,27 @@ public class StockpilePanel extends PluginPanel
 		@Override
 		public Dimension getPreferredSize()
 		{
+			Dimension base = super.getPreferredSize();
+
 			for (Component c : getComponents())
 			{
 				if (c.isVisible())
-					return c.getPreferredSize();
+				{
+					base = c.getPreferredSize();
+					break;
+				}
 			}
 
-			return super.getPreferredSize();
+			// Let the logged-out placeholder fill the viewport so its message centers vertically.
+			if (loggedOutCard != null && loggedOutCard.isVisible())
+			{
+				JViewport viewport = (JViewport) SwingUtilities.getAncestorOfClass(JViewport.class, this);
+
+				if (viewport != null)
+					return new Dimension(base.width, Math.max(base.height, viewport.getExtentSize().height));
+			}
+
+			return base;
 		}
 	};
 	private static final String CARD_MAIN = "main";
@@ -135,6 +149,9 @@ public class StockpilePanel extends PluginPanel
 	private final Map<Integer, TrackedItem> currentItems = new HashMap<>();
 	private final Map<Integer, ImageIcon> rowIconCache = new HashMap<>();
 	private int detailItemId = -1;
+
+	/** The logged-out placeholder card; tracked so {@link #cardsHost} can fill the viewport while it shows. */
+	private JPanel loggedOutCard;
 
 	/** A transient, read-only item shown in the detail view via {@link #showPreview} but never added to the tracked list. */
 	private TrackedItem previewItem;
@@ -492,13 +509,24 @@ public class StockpilePanel extends PluginPanel
 
 		buildDetailCard();
 
-		JPanel loggedOutCard = new JPanel(new GridBagLayout());
+		loggedOutCard = new JPanel(new GridBagLayout());
 		loggedOutCard.setBackground(ColorScheme.DARK_GRAY_COLOR);
-		JLabel loggedOutLabel = new JLabel("Log in to view tracked items");
-		loggedOutLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-		loggedOutLabel.setFont(FontManager.getRunescapeSmallFont());
-		loggedOutLabel.setBorder(new EmptyBorder(10, 10, 10, 10));
-		loggedOutCard.add(loggedOutLabel);
+
+		JPanel loggedOutMessage = new JPanel();
+		loggedOutMessage.setLayout(new BoxLayout(loggedOutMessage, BoxLayout.Y_AXIS));
+		loggedOutMessage.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		loggedOutMessage.setBorder(new EmptyBorder(10, 10, 10, 10));
+
+		for (String line : new String[]{"Log in to view", "your tracked items"})
+		{
+			JLabel lineLabel = new JLabel(line, SwingConstants.CENTER);
+			lineLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+			lineLabel.setFont(FontManager.getRunescapeSmallFont());
+			lineLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
+			loggedOutMessage.add(lineLabel);
+		}
+
+		loggedOutCard.add(loggedOutMessage);
 
 		cardsHost.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		cardsHost.add(mainCard, CARD_MAIN);
