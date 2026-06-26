@@ -834,14 +834,8 @@ public class StockpilePlugin extends Plugin
 
 		if (SECTION_SLOT_KEYS.contains(event.getKey()))
 		{
-			boolean swapped = swapConflictingSection(event);
+			swapConflictingSection(event);
 			refreshPanel();
-			if (swapped)
-			{
-
-				rebuildOpenConfigPanel();
-			}
-
 			return;
 		}
 
@@ -871,10 +865,8 @@ public class StockpilePlugin extends Plugin
 	/**
 	 * Keeps detail-section slots unique: when a section is moved to a slot already
 	 * occupied by another, the other section is swapped into the vacated slot.
-	 *
-	 * @return {@code true} if a swap occurred (so the config panel needs rebuilding)
 	 */
-	private boolean swapConflictingSection(ConfigChanged event)
+	private void swapConflictingSection(ConfigChanged event)
 	{
 		SectionSlot newSlot;
 		SectionSlot oldSlot;
@@ -885,11 +877,11 @@ public class StockpilePlugin extends Plugin
 		}
 		catch (IllegalArgumentException | NullPointerException e)
 		{
-			return false;
+			return;
 		}
 
 		if (newSlot == SectionSlot.NONE || newSlot == oldSlot)
-			return false;
+			return;
 
 		for (String key : SECTION_SLOT_KEYS)
 		{
@@ -901,54 +893,9 @@ public class StockpilePlugin extends Plugin
 			if (other == newSlot)
 			{
 				configManager.setConfiguration(StockpileConfig.GROUP, key, oldSlot);
-				return true;
+				return;
 			}
 		}
-
-		return false;
-	}
-
-	/**
-	 * Forces RuneLite's open config panel to rebuild (via reflection) so a slot
-	 * swap is reflected immediately, since the change originated programmatically
-	 * rather than from the user editing that field.
-	 */
-	private void rebuildOpenConfigPanel()
-	{
-		SwingUtilities.invokeLater(() ->
-		{
-			try
-			{
-				Class<?> configPanelClass = Class.forName("net.runelite.client.plugins.config.ConfigPanel");
-				java.lang.reflect.Method rebuild = configPanelClass.getDeclaredMethod("rebuild");
-				rebuild.setAccessible(true);
-				for (java.awt.Window window : java.awt.Window.getWindows())
-				{
-					for (java.awt.Component panel : findComponents(window, configPanelClass))
-						rebuild.invoke(panel);
-				}
-			}
-			catch (ReflectiveOperationException e)
-			{
-				log.debug("Unable to refresh config panel after section swap", e);
-			}
-		});
-	}
-
-	/** Depth-first collects all components under {@code root} that are instances of {@code type}. */
-	private static List<java.awt.Component> findComponents(java.awt.Component root, Class<?> type)
-	{
-		List<java.awt.Component> found = new ArrayList<>();
-		if (type.isInstance(root))
-			found.add(root);
-
-		if (root instanceof java.awt.Container)
-		{
-			for (java.awt.Component child : ((java.awt.Container) root).getComponents())
-				found.addAll(findComponents(child, type));
-		}
-
-		return found;
 	}
 
 	/** Adds a "Track Item" / "Stop Tracking" right-click option to item menu entries, when enabled. */
