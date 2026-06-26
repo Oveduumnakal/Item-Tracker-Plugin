@@ -197,6 +197,8 @@ public class StockpilePlugin extends Plugin
 
 	private volatile Map<Integer, WikiRealtimePriceClient.ItemMapping> itemMappings = Collections.emptyMap();
 
+	private volatile boolean mappingsLoaded;
+
 	/**
 	 * Builds the side panel (wiring its callbacks back to this plugin), registers
 	 * the nav button and overlays, restores persisted items, and kicks off the
@@ -243,8 +245,48 @@ public class StockpilePlugin extends Plugin
 	private void fetchItemMappings()
 	{
 		Map<Integer, WikiRealtimePriceClient.ItemMapping> mappings = wikiPriceClient.fetchMapping();
-		if (!mappings.isEmpty())
-			itemMappings = mappings;
+		if (mappings.isEmpty())
+			return;
+
+		itemMappings = mappings;
+		mappingsLoaded = true;
+
+		clientThread.invokeLater(this::resolveTradeabilityForAll);
+	}
+
+	/**
+	 * Re-evaluates GE-tradeability for every tracked item and the preview item now
+	 * that the wiki mapping is available, then refreshes the panel. Items absent from
+	 * the mapping are not on the Grand Exchange, so they are marked non-tradeable and
+	 * any stale price-load failure is cleared.
+	 */
+	private void resolveTradeabilityForAll()
+	{
+		trackedItems.values().forEach(this::resolveTradeable);
+
+		if (previewItem != null)
+			resolveTradeable(previewItem);
+
+		refreshPanel();
+	}
+
+	/**
+	 * Narrows an item's tradeable flag using the wiki mapping: an item that the game
+	 * composition reports as tradeable but which is absent from the Grand Exchange
+	 * mapping (e.g. coins, burnt food) is reclassified as non-tradeable so it shows
+	 * "Item not tradeable" rather than a price-load failure. No-op until the mapping
+	 * has loaded, so a slow fetch never mislabels a genuinely tradeable item.
+	 */
+	private void resolveTradeable(TrackedItem item)
+	{
+		if (!mappingsLoaded)
+			return;
+
+		if (item.isTradeable() && !itemMappings.containsKey(item.getItemId()))
+		{
+			item.setTradeable(false);
+			item.setPriceLoadFailed(false);
+		}
 	}
 
 	/** Tears down the nav button, overlays, panel, and refresh task and clears all in-memory state. */
@@ -431,6 +473,7 @@ public class StockpilePlugin extends Plugin
 			var composition = itemManager.getItemComposition(itemId);
 			TrackedItem tracked = new TrackedItem(itemId, composition.getName());
 			tracked.setTradeable(composition.isTradeable());
+			resolveTradeable(tracked);
 			tracked.setQuantity(initialQuantity);
 			tracked.setMode(mode == null ? TrackItemMode.TRACK : mode);
 			if (records != null)
@@ -558,6 +601,8 @@ public class StockpilePlugin extends Plugin
 	/** Copies cached GE metadata (buy limit, value, alch values) onto an item, if available. */
 	private void applyItemMetadata(TrackedItem tracked)
 	{
+		resolveTradeable(tracked);
+
 		WikiRealtimePriceClient.ItemMapping mapping = itemMappings.get(tracked.getItemId());
 		if (mapping == null)
 			return;
@@ -632,7 +677,7 @@ public class StockpilePlugin extends Plugin
 					persistTrackedItems();
 				}
 			}
-			else if (!item.hasPrices() && item.isTradeable())
+			else if (!item.hasPrices() && item.isTradeable() && mappingsLoaded)
 				item.setPriceLoadFailed(true);
 		}
 
