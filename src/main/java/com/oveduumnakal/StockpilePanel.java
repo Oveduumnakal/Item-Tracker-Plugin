@@ -783,9 +783,10 @@ public class StockpilePanel extends PluginPanel
 		row.setBorder(new EmptyBorder(4, 6, 4, 6));
 		row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 36));
 
-		JLabel nameLabel = new JLabel(itemName);
+		JLabel nameLabel = new JLabel();
 		nameLabel.setForeground(Color.WHITE);
 		nameLabel.setFont(FontManager.getRunescapeSmallFont());
+		setEllipsisText(nameLabel, itemName);
 
 		JButton viewBtn = new JButton(buildEyeIcon(14));
 		viewBtn.setPreferredSize(new Dimension(28, 22));
@@ -1085,22 +1086,24 @@ public class StockpilePanel extends PluginPanel
 		centerPanel.setLayout(new BoxLayout(centerPanel, BoxLayout.Y_AXIS));
 		centerPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 
-		JLabel nameLabel = new JLabel(item.getName());
+		JLabel nameLabel = new JLabel();
 		nameLabel.setForeground(Color.WHITE);
 		nameLabel.setFont(FontManager.getRunescapeBoldFont());
+		setEllipsisText(nameLabel, item.getName());
 
 		JLabel qtyLabel = new JLabel("Qty: " + GpFormat.shortValue(item.getQuantity()));
 		qtyLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 		qtyLabel.setFont(FontManager.getRunescapeSmallFont());
 		qtyLabel.setToolTipText(NUMBER_FORMAT.format(item.getQuantity()));
 
-		JPanel nameRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+		JPanel nameRow = new JPanel(new BorderLayout(6, 0));
 		nameRow.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 		nameRow.setAlignmentX(Component.LEFT_ALIGNMENT);
-		nameRow.add(iconLabel);
-		nameRow.add(nameLabel);
+		nameRow.add(iconLabel, BorderLayout.WEST);
+		nameRow.add(nameLabel, BorderLayout.CENTER);
+
 		if (showQty)
-			nameRow.add(qtyLabel);
+			nameRow.add(qtyLabel, BorderLayout.EAST);
 
 		centerPanel.add(nameRow);
 
@@ -1382,6 +1385,85 @@ public class StockpilePanel extends PluginPanel
 		label.setText(text);
 	}
 
+	private static final String ELLIPSIS = "…";
+
+	private static final String FULL_TEXT_KEY = "stockpile.fullText";
+
+	/**
+	 * Assigns text to a label, truncating it with a trailing ellipsis so it fits the
+	 * label's available width and exposing the untruncated text as a tooltip. The text
+	 * is re-truncated automatically whenever the label is resized.
+	 */
+	private static void setEllipsisText(JLabel label, String fullText)
+	{
+		label.putClientProperty(FULL_TEXT_KEY, fullText);
+		label.setToolTipText(fullText);
+
+		boolean hasListener = Arrays.stream(label.getComponentListeners())
+				.anyMatch(l -> l instanceof EllipsisResizeListener);
+
+		if (!hasListener)
+			label.addComponentListener(new EllipsisResizeListener());
+
+		applyEllipsis(label);
+	}
+
+	/** Re-truncates a label's stored full text with an ellipsis to fit its current width. */
+	private static void applyEllipsis(JLabel label)
+	{
+		Object stored = label.getClientProperty(FULL_TEXT_KEY);
+
+		if (!(stored instanceof String))
+			return;
+
+		String fullText = (String) stored;
+		Insets insets = label.getInsets();
+		int available = label.getWidth() - insets.left - insets.right;
+
+		if (available <= 0)
+		{
+			label.setText(fullText);
+			return;
+		}
+
+		FontMetrics fm = label.getFontMetrics(label.getFont());
+
+		if (fm.stringWidth(fullText) <= available)
+		{
+			label.setText(fullText);
+			return;
+		}
+
+		int budget = available - fm.stringWidth(ELLIPSIS);
+
+		if (budget <= 0)
+		{
+			label.setText(ELLIPSIS);
+			return;
+		}
+
+		int end = 0;
+		int used = 0;
+
+		while (end < fullText.length() && used + fm.charWidth(fullText.charAt(end)) <= budget)
+		{
+			used += fm.charWidth(fullText.charAt(end));
+			end++;
+		}
+
+		label.setText(fullText.substring(0, end) + ELLIPSIS);
+	}
+
+	/** Re-applies ellipsis truncation to its label whenever the label's width changes. */
+	private static final class EllipsisResizeListener extends ComponentAdapter
+	{
+		@Override
+		public void componentResized(ComponentEvent e)
+		{
+			applyEllipsis((JLabel) e.getComponent());
+		}
+	}
+
 	private static String toHex(Color c)
 	{
 		return String.format("#%02x%02x%02x", c.getRed(), c.getGreen(), c.getBlue());
@@ -1494,6 +1576,8 @@ public class StockpilePanel extends PluginPanel
 		detailIconLabel.setVerticalAlignment(SwingConstants.CENTER);
 		detailNameLabel.setForeground(Color.WHITE);
 		detailNameLabel.setFont(FontManager.getRunescapeBoldFont());
+		detailNameLabel.setMaximumSize(new Dimension(Integer.MAX_VALUE,
+				detailNameLabel.getFontMetrics(detailNameLabel.getFont()).getHeight()));
 		detailQtyLabel.setForeground(Color.WHITE);
 		detailQtyLabel.setFont(FontManager.getRunescapeSmallFont());
 
@@ -3103,7 +3187,7 @@ public class StockpilePanel extends PluginPanel
 
 		AsyncBufferedImage icon = itemManager.getImage(item.getItemId());
 		icon.addTo(detailIconLabel);
-		detailNameLabel.setText(item.getName());
+		setEllipsisText(detailNameLabel, item.getName());
 
 		int detailQty = item.getQuantity();
 		detailQtyLabel.setText("Qty: " + GpFormat.shortValue(detailQty));
