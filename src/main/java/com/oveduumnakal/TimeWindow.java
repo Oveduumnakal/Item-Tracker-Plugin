@@ -20,6 +20,7 @@ public enum TimeWindow
 {
 	NONE("None", Duration.ZERO, "None"),
 	LIVE("Ltst", Duration.ZERO, "5 Minute"),
+	M5("5m", Duration.ofMinutes(5), "5 Minute Avg"),
 	H1("1h", Duration.ofHours(1), "1 Hour"),
 	H3("3h", Duration.ofHours(3), "3 Hour"),
 	H6("6h", Duration.ofHours(6), "6 Hour"),

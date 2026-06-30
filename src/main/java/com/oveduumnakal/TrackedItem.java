@@ -36,6 +36,9 @@ public class TrackedItem
 	private long lowPrice;
 	private long avgPrice;
 
+	private long latestHighTime;
+	private long latestLowTime;
+
 	private int highDelta;
 	private int lowDelta;
 	private int avgDelta;

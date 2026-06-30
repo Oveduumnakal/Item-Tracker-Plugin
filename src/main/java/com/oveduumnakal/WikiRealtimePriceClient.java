@@ -49,12 +49,19 @@ public class WikiRealtimePriceClient
 
 	private static final String USER_AGENT = "RuneLite Stockpile Plugin";
 
-	/** The latest instant-buy ({@code high}) and instant-sell ({@code low}) prices for one item. */
+	/**
+	 * The latest instant-buy ({@code high}) and instant-sell ({@code low}) prices
+	 * for one item, each with the epoch-second timestamp of the trade that set it
+	 * ({@code highTime}, {@code lowTime}). The two sides are independent, so one can
+	 * be much staler than the other.
+	 */
 	@Value
 	public static class ItemPrices
 	{
 		long high;
 		long low;
+		long highTime;
+		long lowTime;
 
 		/** @return the midpoint of high and low, or whichever side is present if only one is. */
 		public long avg()
@@ -139,7 +146,11 @@ public class WikiRealtimePriceClient
 							? obj.get("high").getAsLong() : 0L;
 					long low = obj.has("low") && !obj.get("low").isJsonNull()
 							? obj.get("low").getAsLong() : 0L;
-					result.put(id, new ItemPrices(high, low));
+					long highTime = obj.has("highTime") && !obj.get("highTime").isJsonNull()
+							? obj.get("highTime").getAsLong() : 0L;
+					long lowTime = obj.has("lowTime") && !obj.get("lowTime").isJsonNull()
+							? obj.get("lowTime").getAsLong() : 0L;
+					result.put(id, new ItemPrices(high, low, highTime, lowTime));
 				}
 				catch (NumberFormatException | IllegalStateException e)
 				{

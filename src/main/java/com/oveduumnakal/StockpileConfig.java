@@ -62,6 +62,7 @@ public interface StockpileConfig extends Config
 	String KEY_ROW_2_DATA = "row2Data";
 	String KEY_ROW_3_DATA = "row3Data";
 	String KEY_SHOW_ITEM_PROFIT_ROW = "showItemProfitRow";
+	String KEY_STALE_PRICE_THRESHOLD = "stalePriceThresholdMinutes";
 
 	String KEY_SHOW_ITEM_VALUES = "showItemValues";
 	String KEY_SHOW_COLLECTION_VALUES = "showCollectionValues";
@@ -263,6 +264,19 @@ public interface StockpileConfig extends Config
 	default boolean showItemProfitRow()
 	{
 		return true;
+	}
+
+	@Range(min = 1)
+	@ConfigItem(
+			keyName = KEY_STALE_PRICE_THRESHOLD,
+			name = "Stale Price (min)",
+			description = "Dim the Ltst high or low when its last trade is older than this many minutes.",
+			section = trackedItemSection,
+			position = 9
+	)
+	default int stalePriceThresholdMinutes()
+	{
+		return 60;
 	}
 
 	@ConfigItem(

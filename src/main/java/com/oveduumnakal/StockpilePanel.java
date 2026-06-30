@@ -98,6 +98,9 @@ public class StockpilePanel extends PluginPanel
 	private static final Color COLOR_LOW  = new Color(220, 100, 100);
 	private static final Color COLOR_AVG  = new Color(255, 200, 0);
 
+	private static final Color COLOR_HIGH_STALE = new Color(70, 110, 70);
+	private static final Color COLOR_LOW_STALE  = new Color(110, 70, 70);
+
 	private static final Color TINT_HIGH = new Color(35, 70, 35);
 	private static final Color TINT_LOW  = new Color(70, 35, 35);
 	private static final Color TINT_AVG  = new Color(75, 60, 25);
@@ -242,7 +245,7 @@ public class StockpilePanel extends PluginPanel
 	private final Map<TimeWindow, JLabel[]> overviewLabels = new EnumMap<>(TimeWindow.class);
 	private final List<JLabel> overviewWindowLabels = new ArrayList<>();
 	private static final TimeWindow[] OVERVIEW_WINDOWS = {
-			TimeWindow.LIVE, TimeWindow.H1, TimeWindow.H3, TimeWindow.H6, TimeWindow.H12,
+			TimeWindow.LIVE, TimeWindow.M5, TimeWindow.H1, TimeWindow.H3, TimeWindow.H6, TimeWindow.H12,
 			TimeWindow.H24, TimeWindow.WEEK, TimeWindow.MONTH, TimeWindow.MONTH3,
 			TimeWindow.MONTH6, TimeWindow.YEAR
 	};
@@ -1324,9 +1327,15 @@ public class StockpilePanel extends PluginPanel
 					vol = stats.getVolume();
 				}
 
+				boolean isLive = window == TimeWindow.LIVE;
+
 				JLabel windowLbl = new JLabel(window.toString());
 				windowLbl.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 				windowLbl.setFont(FontManager.getRunescapeSmallFont());
+				if (isLive)
+					windowLbl.setToolTipText("Buy: " + formatAge(item.getLatestHighTime())
+							+ ", Sell: " + formatAge(item.getLatestLowTime()));
+
 				c.gridx = 0;
 				c.gridy = gridy;
 				c.weightx = 0;
@@ -1340,6 +1349,10 @@ public class StockpilePanel extends PluginPanel
 					cell.setFont(FontManager.getRunescapeSmallFont());
 					cell.setForeground(COLOR_HIGH);
 					installItemValue(cell, h, "", "High", TINT_HIGH);
+					if (isLive)
+						applyLiveStaleness(cell, h, "High", "Last Buy", item.getLatestHighTime(),
+								COLOR_HIGH, COLOR_HIGH_STALE);
+
 					visibleCells.add(cell);
 				}
 
@@ -1349,6 +1362,10 @@ public class StockpilePanel extends PluginPanel
 					cell.setFont(FontManager.getRunescapeSmallFont());
 					cell.setForeground(COLOR_LOW);
 					installItemValue(cell, l, "", "Low", TINT_LOW);
+					if (isLive)
+						applyLiveStaleness(cell, l, "Low", "Last Sell", item.getLatestLowTime(),
+								COLOR_LOW, COLOR_LOW_STALE);
+
 					visibleCells.add(cell);
 				}
 
@@ -1724,6 +1741,60 @@ public class StockpilePanel extends PluginPanel
 		HoverTintListener listener = new HoverTintListener(label, shortText, tint);
 		label.addMouseListener(listener);
 		SwingUtilities.invokeLater(listener::applyIfHovered);
+	}
+
+	/**
+	 * Reflects the staleness of a Ltst high/low value on its cell: appends the last
+	 * trade time as a second tooltip line and dims the value's color when that trade
+	 * is older than the configured threshold.
+	 *
+	 * @param sideLabel    the value side, e.g. {@code "High"} or {@code "Low"}
+	 * @param timeLabel    the trade-time caption, e.g. {@code "Last Buy"}
+	 * @param tradeTime    the trade's epoch-second timestamp (0 when unknown)
+	 * @param freshColor   the normal value color
+	 * @param staleColor   the dimmed color used once the value is stale
+	 */
+	private void applyLiveStaleness(JLabel cell, long value, String sideLabel, String timeLabel,
+			long tradeTime, Color freshColor, Color staleColor)
+	{
+		cell.setToolTipText("<html>" + sideLabel + ": " + NUMBER_FORMAT.format(value) + " gp<br>"
+				+ timeLabel + ": " + formatAge(tradeTime) + "</html>");
+
+		if (isStale(tradeTime))
+			cell.setForeground(staleColor);
+		else
+			cell.setForeground(freshColor);
+	}
+
+	/** @return whether {@code epochSeconds} is older than the configured stale-price threshold. */
+	private boolean isStale(long epochSeconds)
+	{
+		if (epochSeconds <= 0)
+			return false;
+
+		long ageSec = System.currentTimeMillis() / 1000L - epochSeconds;
+		return ageSec > (long) config.stalePriceThresholdMinutes() * 60L;
+	}
+
+	/** Formats an epoch-second timestamp's age as a compact relative string, e.g. {@code "5s"}, {@code "5m"}, {@code "3hr"}, {@code "2d ago"}. */
+	private static String formatAge(long epochSeconds)
+	{
+		if (epochSeconds <= 0)
+			return "unknown";
+
+		long ageSec = Math.max(0, System.currentTimeMillis() / 1000L - epochSeconds);
+		if (ageSec < 60)
+			return ageSec + "s ago";
+
+		long mins = ageSec / 60;
+		if (mins < 60)
+			return mins + "m ago";
+
+		long hours = mins / 60;
+		if (hours < 24)
+			return hours + "hr ago";
+
+		return (hours / 24) + "d ago";
 	}
 
 	private void clearItemValue(JLabel label, String text)
