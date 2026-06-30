@@ -3642,6 +3642,7 @@ public class StockpilePanel extends PluginPanel
 		detailDescriptionLabel.setVisible(hasExamine);
 
 		final boolean hasPrices = item.hasPrices();
+		final boolean showMarket = item.isTradeable();
 		final ValueFormat full = ValueFormat.FULL;
 
 		icvHigh.setText("High: " + (hasPrices ? formatTotalGp(item.getHighPrice(), full) : "—"));
@@ -3651,7 +3652,7 @@ public class StockpilePanel extends PluginPanel
 		icvVolume.setText("Volume (24h): " + (vol24 > 0 ? NUMBER_FORMAT.format(vol24) : "—"));
 
 		int colQty = item.getRecordQuantitySum();
-		ccvSection.setVisible(colQty > 0);
+		ccvSection.setVisible(showMarket && colQty > 0);
 		if (colQty > 0)
 		{
 			long cHigh = (long) colQty * item.getHighPrice();
@@ -3740,6 +3741,13 @@ public class StockpilePanel extends PluginPanel
 
 		notificationsSection.setVisible(!viewOnly);
 		acquisitionsSection.setVisible(!viewOnly);
+
+		itemValuesSection.setVisible(showMarket);
+		marketInfoSection.setVisible(showMarket);
+		priceOverviewSection.setVisible(showMarket);
+		priceGraphSection.setVisible(showMarket);
+		volumeGraphSection.setVisible(showMarket);
+
 		updateAcqPopoutButton();
 
 		if (acqPopoutModel != null)
