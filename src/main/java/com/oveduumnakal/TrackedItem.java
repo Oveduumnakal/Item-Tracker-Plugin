@@ -32,6 +32,9 @@ public class TrackedItem
 	private boolean tradeable = true;
 	private boolean priceLoadFailed;
 
+	private boolean favorite;
+	private String category;
+
 	private long highPrice;
 	private long lowPrice;
 	private long avgPrice;

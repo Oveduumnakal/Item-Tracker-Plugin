@@ -118,6 +118,42 @@ public class StockpilePanel extends PluginPanel
 	private final IntFunction<String> examineLookup;
 	/** Reorder callback: (itemId, targetIndex) — moves the item to a new position in the tracked list. */
 	private final BiConsumer<Integer, Integer> onReorder;
+	/** Drag-reorder callback: replaces the full tracked-item order with the given id sequence. */
+	private final Consumer<List<Integer>> onSetGlobalOrder;
+	/** Flips the persisted compact-view config flag; the resulting config change rebuilds the list. */
+	private final Runnable onToggleCompactView;
+	/** Favorite toggle callback: (itemId, favorite) — pins/unpins an item to the top Favorites group. */
+	private final BiConsumer<Integer, Boolean> onSetFavorite;
+	/** Group collapse callback: (groupKey, collapsed) — persists a group's accordion state. */
+	private final BiConsumer<String, Boolean> onSetGroupCollapsed;
+	/** Category create/rename/delete/reorder and per-item assignment operations. */
+	private final CategoryActions categoryActions;
+
+	/** The category management operations the panel invokes; implemented by the plugin. */
+	public interface CategoryActions
+	{
+		void setItemCategory(int itemId, String category);
+
+		void create(String name);
+
+		void rename(String oldName, String newName);
+
+		void delete(String name);
+
+		void reorder(String name, int targetIndex);
+	}
+
+	/** Latest category state from the plugin, used to render the grouped/accordion list. */
+	private List<CategoryState> categories = new ArrayList<>();
+	private boolean favoritesCollapsed;
+	private boolean uncategorizedCollapsed;
+
+	/** Whether the list is currently grouped (favorites or categories active); disables drag reorder, which is global-order only. */
+	private boolean groupingActive;
+
+	/** Last-rendered items/mode, retained so toggling manage mode can re-render rows without a full plugin refresh. */
+	private List<TrackedItem> lastRenderItems = new ArrayList<>();
+	private PriceIndicatorMode lastRenderIndicatorMode = PriceIndicatorMode.OFF;
 
 	/** Item ids in current display order, kept in sync on each {@link #rebuild}, used to compute reorder targets. */
 	private final List<Integer> orderedItemIds = new ArrayList<>();
@@ -125,11 +161,17 @@ public class StockpilePanel extends PluginPanel
 	/** Whether the list is in reorder mode, which reveals the per-row drag/arrow strip. */
 	private boolean reorderMode = false;
 
-	/** The per-row reorder strips, tracked so reorder mode can show/hide them without a full rebuild. */
-	private final List<JComponent> reorderStrips = new ArrayList<>();
-
 	/** Header toggle that enters/exits reorder mode. */
 	private JLabel reorderToggle;
+
+	/** Header toggle that switches between the standard and compact row layouts. */
+	private JLabel compactToggle;
+
+	/** Header button (manage mode only) that opens the Manage Categories dialog. */
+	private JLabel categoriesButton;
+
+	/** Header toggle that shows/hides the tracked-list filter field. */
+	private JLabel filterToggle;
 
 	private final CardLayout cardLayout = new CardLayout();
 
@@ -252,6 +294,10 @@ public class StockpilePanel extends PluginPanel
 	private final IconTextField searchField;
 	private final JPanel searchResultsPanel;
 
+	/** Name filter over the tracked list, shown only when the list overflows into scrolling. */
+	private IconTextField trackedFilterField;
+	private String trackedFilter = "";
+
 	private final JPanel trackedItemsPanel;
 	private final JPanel bottomPanel;
 	private final JLabel totalsTitle;
@@ -293,6 +339,15 @@ public class StockpilePanel extends PluginPanel
 	private final JPanel totalHighRow;
 	private final JPanel totalLowRow;
 	private final JPanel totalAvgRow;
+
+	/** The standard totals rows (high/low/avg + profit), toggled off in compact view. */
+	private JPanel totalsRows;
+
+	/** Compact-view totals: a two-line "Total / profit (avg)" panel shown instead of the high/low/avg rows. */
+	private JPanel compactTotalsRows;
+	private JLabel compactTotalsCountLabel;
+	private JLabel compactTotalsValueLabel;
+
 	private final JLabel lastRefreshLabel;
 
 	private final JPanel footerPanel = new JPanel(new BorderLayout());
@@ -307,6 +362,8 @@ public class StockpilePanel extends PluginPanel
 
 	/** Drag-reorder state. {@code dragItemId} is the item being dragged, or -1 when not dragging. */
 	private int dragItemId = -1;
+	/** The dragged item's group (visual-order item ids), so a drag stays within its group. */
+	private List<Integer> dragGroupIds = new ArrayList<>();
 	/** The list index where the dragged item would be inserted on drop. */
 	private int dragInsertIndex = -1;
 	/** The y-coordinate (in {@link #trackedItemsPanel} space) at which to paint the drop indicator line. */
@@ -320,6 +377,8 @@ public class StockpilePanel extends PluginPanel
 	private static final int DRAG_SCROLL_STEP = 12;
 	/** Client property on each row card holding its item id, used to map drag positions to list indices. */
 	private static final String ROW_ITEM_ID = "stockpileItemId";
+	/** Client property marking a group accordion header, used to find group boundaries during a drag. */
+	private static final String GROUP_HEADER_KEY = "stockpileGroupHeader";
 
 	private static final Color LOADING_COLOR = new Color(150, 150, 150);
 	private static final Color DESCRIPTION_COLOR = new Color(160, 160, 160);
@@ -385,7 +444,12 @@ public class StockpilePanel extends PluginPanel
 			Consumer<Integer> onNotificationsEdited,
 			Runnable onClearAll,
 			IntFunction<String> examineLookup,
-			BiConsumer<Integer, Integer> onReorder)
+			BiConsumer<Integer, Integer> onReorder,
+			Consumer<List<Integer>> onSetGlobalOrder,
+			Runnable onToggleCompactView,
+			BiConsumer<Integer, Boolean> onSetFavorite,
+			BiConsumer<String, Boolean> onSetGroupCollapsed,
+			CategoryActions categoryActions)
 	{
 		this.itemManager = itemManager;
 		this.config = config;
@@ -398,6 +462,11 @@ public class StockpilePanel extends PluginPanel
 		this.onClearAll = onClearAll;
 		this.examineLookup = examineLookup;
 		this.onReorder = onReorder;
+		this.onSetGlobalOrder = onSetGlobalOrder;
+		this.onToggleCompactView = onToggleCompactView;
+		this.onSetFavorite = onSetFavorite;
+		this.onSetGroupCollapsed = onSetGroupCollapsed;
+		this.categoryActions = categoryActions;
 
 		setLayout(new BorderLayout(0, 8));
 		setBorder(new EmptyBorder(10, 10, 10, 10));
@@ -431,6 +500,21 @@ public class StockpilePanel extends PluginPanel
 			public void changedUpdate(DocumentEvent e) { onSearch(searchField.getText()); }
 		});
 
+		trackedFilterField = new IconTextField();
+		trackedFilterField.setIcon(IconTextField.Icon.SEARCH);
+		trackedFilterField.setPreferredSize(new Dimension(PluginPanel.PANEL_WIDTH - 20, 28));
+		trackedFilterField.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		trackedFilterField.setHoverBackgroundColor(ColorScheme.DARK_GRAY_HOVER_COLOR);
+		trackedFilterField.setMinimumSize(new Dimension(0, 28));
+		trackedFilterField.setVisible(false);
+		trackedFilterField.addClearListener(this::onTrackedFilterChanged);
+		trackedFilterField.getDocument().addDocumentListener(new DocumentListener()
+		{
+			public void insertUpdate(DocumentEvent e) { onTrackedFilterChanged(); }
+			public void removeUpdate(DocumentEvent e) { onTrackedFilterChanged(); }
+			public void changedUpdate(DocumentEvent e) { onTrackedFilterChanged(); }
+		});
+
 		trackedItemsPanel = new JPanel()
 		{
 			@Override
@@ -450,13 +534,15 @@ public class StockpilePanel extends PluginPanel
 		JLabel trackedLabel = new JLabel("Tracked Items", SwingConstants.CENTER);
 		trackedLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 		trackedLabel.setFont(FontManager.getRunescapeBoldFont());
-		trackedLabel.setBorder(new EmptyBorder(6, 0, 4, 0));
+		trackedLabel.setBorder(new EmptyBorder(0, 0, 4, 0));
 
 		reorderToggle = new JLabel("⇅", SwingConstants.CENTER);
+		reorderToggle.setVerticalAlignment(SwingConstants.TOP);
+		reorderToggle.setAlignmentY(Component.TOP_ALIGNMENT);
 		reorderToggle.setFont(FontManager.getRunescapeBoldFont());
 		reorderToggle.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 		reorderToggle.setBorder(new EmptyBorder(6, 0, 4, 6));
-		reorderToggle.setToolTipText("Reorder tracked items");
+		reorderToggle.setToolTipText("Reorganize tracked items");
 		reorderToggle.addMouseListener(new MouseAdapter()
 		{
 			@Override
@@ -467,10 +553,76 @@ public class StockpilePanel extends PluginPanel
 		});
 		updateReorderToggle();
 
-		JPanel trackedLabelWrapper = new JPanel(new BorderLayout());
+		compactToggle = new JLabel("≣", SwingConstants.CENTER);
+		compactToggle.setVerticalAlignment(SwingConstants.TOP);
+		compactToggle.setAlignmentY(Component.TOP_ALIGNMENT);
+		// The ≣ glyph renders from a taller fallback font, so shrink it to match the other header icons.
+		compactToggle.setFont(FontManager.getRunescapeBoldFont().deriveFont(14f));
+		compactToggle.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+		compactToggle.setBorder(new EmptyBorder(6, 0, 4, 6));
+		compactToggle.setToolTipText("Toggle compact view");
+		compactToggle.addMouseListener(new MouseAdapter()
+		{
+			@Override
+			public void mouseClicked(MouseEvent e)
+			{
+				if (onToggleCompactView != null)
+					onToggleCompactView.run();
+			}
+		});
+		updateCompactToggle();
+
+		categoriesButton = new JLabel("⚙", SwingConstants.CENTER);
+		categoriesButton.setVerticalAlignment(SwingConstants.TOP);
+		categoriesButton.setAlignmentY(Component.TOP_ALIGNMENT);
+		categoriesButton.setFont(FontManager.getRunescapeBoldFont());
+		categoriesButton.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		categoriesButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+		categoriesButton.setBorder(new EmptyBorder(6, 0, 4, 6));
+		categoriesButton.setToolTipText("Manage categories");
+		categoriesButton.setVisible(false);
+		categoriesButton.addMouseListener(new MouseAdapter()
+		{
+			@Override
+			public void mouseClicked(MouseEvent e)
+			{
+				openManageCategoriesDialog();
+			}
+		});
+
+		filterToggle = new JLabel();
+		filterToggle.setVerticalAlignment(SwingConstants.TOP);
+		filterToggle.setAlignmentY(Component.TOP_ALIGNMENT);
+		filterToggle.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+		filterToggle.setBorder(new EmptyBorder(6, 4, 4, 6));
+		filterToggle.setToolTipText("Filter tracked items");
+		filterToggle.addMouseListener(new MouseAdapter()
+		{
+			@Override
+			public void mouseClicked(MouseEvent e)
+			{
+				toggleTrackedFilter();
+			}
+		});
+		updateFilterToggle();
+
+		JPanel headerToggles = new JPanel();
+		headerToggles.setLayout(new BoxLayout(headerToggles, BoxLayout.X_AXIS));
+		headerToggles.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		headerToggles.add(categoriesButton);
+		headerToggles.add(filterToggle);
+		headerToggles.add(compactToggle);
+		headerToggles.add(reorderToggle);
+
+		// Icons sit on their own top row (right-justified) above the section label, 2px apart.
+		JPanel togglesRow = new JPanel(new BorderLayout());
+		togglesRow.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		togglesRow.add(headerToggles, BorderLayout.EAST);
+
+		JPanel trackedLabelWrapper = new JPanel(new BorderLayout(0, 2));
 		trackedLabelWrapper.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		trackedLabelWrapper.add(togglesRow, BorderLayout.NORTH);
 		trackedLabelWrapper.add(trackedLabel, BorderLayout.CENTER);
-		trackedLabelWrapper.add(reorderToggle, BorderLayout.EAST);
 
 		JPanel totalsPanel = new JPanel(new BorderLayout(6, 0));
 		totalsPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
@@ -487,7 +639,7 @@ public class StockpilePanel extends PluginPanel
 		totalsTitle.setFont(FontManager.getRunescapeBoldFont());
 		totalsTitle.setBorder(TITLE_BORDER_WITH_TOP_DIVIDER);
 
-		JPanel totalsRows = new JPanel();
+		totalsRows = new JPanel();
 		totalsRows.setLayout(new BoxLayout(totalsRows, BoxLayout.Y_AXIS));
 		totalsRows.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 
@@ -515,12 +667,44 @@ public class StockpilePanel extends PluginPanel
 		totalsRows.add(totalLowRow);
 		totalsRows.add(totalAvgRow);
 
+		compactTotalsRows = new JPanel();
+		compactTotalsRows.setLayout(new BoxLayout(compactTotalsRows, BoxLayout.Y_AXIS));
+		compactTotalsRows.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		compactTotalsRows.setVisible(false);
+
+		compactTotalsCountLabel = new JLabel("0 itm");
+		compactTotalsCountLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		compactTotalsCountLabel.setFont(FontManager.getRunescapeSmallFont());
+
+		JLabel compactTotalsTitle = new JLabel("Total");
+		compactTotalsTitle.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		compactTotalsTitle.setFont(FontManager.getRunescapeSmallFont());
+
+		JPanel compactCountRow = new JPanel(new BorderLayout(6, 0));
+		compactCountRow.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		compactCountRow.add(compactTotalsTitle, BorderLayout.WEST);
+		compactCountRow.add(compactTotalsCountLabel, BorderLayout.EAST);
+
+		compactTotalsValueLabel = new JLabel("—");
+		compactTotalsValueLabel.setForeground(COLOR_AVG);
+		compactTotalsValueLabel.setFont(FontManager.getRunescapeSmallFont());
+
+		JPanel compactValueRow = new JPanel(new BorderLayout(6, 0));
+		compactValueRow.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		compactValueRow.add(compactTotalsValueLabel, BorderLayout.WEST);
+
+		compactTotalsRows.add(compactCountRow);
+		compactTotalsRows.add(compactValueRow);
+
 		JPanel totalsRowsWrapper = new JPanel(new GridBagLayout());
 		totalsRowsWrapper.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 		GridBagConstraints wrapC = new GridBagConstraints();
 		wrapC.fill = GridBagConstraints.HORIZONTAL;
 		wrapC.weightx = 1;
+		wrapC.gridy = 0;
 		totalsRowsWrapper.add(totalsRows, wrapC);
+		wrapC.gridy = 1;
+		totalsRowsWrapper.add(compactTotalsRows, wrapC);
 		totalsPanel.add(totalsRowsWrapper, BorderLayout.CENTER);
 
 		lastRefreshLabel = new JLabel("Prices not yet loaded", SwingConstants.CENTER);
@@ -565,6 +749,7 @@ public class StockpilePanel extends PluginPanel
 		topPanel.add(searchResultsPanel);
 		topPanel.add(geEstimatesSlotTop);
 		topPanel.add(trackedLabelWrapper);
+		topPanel.add(trackedFilterField);
 
 		JPanel mainCard = new JPanel(new BorderLayout(0, 8));
 		mainCard.setBackground(ColorScheme.DARK_GRAY_COLOR);
@@ -723,6 +908,46 @@ public class StockpilePanel extends PluginPanel
 			if (quantity == lastCoinsIconValue)
 				coinsIcon.setIcon(icon);
 		});
+	}
+
+	/**
+	 * Populates the compact totals: item count plus a {@code total avg value (profit)} line,
+	 * where the total avg uses the configured value format and the profit is always short format.
+	 * The profit parenthetical is coloured per-part — grey parentheses with a green/red profit —
+	 * while the parenthetical is dropped entirely when there is no cost-basis profit to show.
+	 */
+	private void updateCompactTotals(int itemCount, long totalAvg, long totalCostBasis,
+			boolean hasPrices, boolean showProfit, ValueFormat fmt)
+	{
+		compactTotalsCountLabel.setText(itemCount + " itm");
+		compactTotalsValueLabel.setForeground(COLOR_AVG);
+
+		if (!hasPrices)
+		{
+			compactTotalsValueLabel.setText("—");
+			compactTotalsValueLabel.setToolTipText(null);
+			return;
+		}
+
+		String avgText = formatTotalGp(totalAvg, fmt);
+
+		if (!showProfit)
+		{
+			compactTotalsValueLabel.setText(avgText);
+			compactTotalsValueLabel.setToolTipText(NUMBER_FORMAT.format(totalAvg) + " gp");
+			return;
+		}
+
+		long profit = totalAvg - totalCostBasis;
+		String sign = profit > 0 ? "+" : "";
+		Color profitColor = profit == 0 ? ColorScheme.LIGHT_GRAY_COLOR : (profit > 0 ? COLOR_HIGH : COLOR_LOW);
+		String grey = toHex(ColorScheme.LIGHT_GRAY_COLOR);
+
+		compactTotalsValueLabel.setText("<html><span style='color:" + toHex(COLOR_AVG) + "'>" + avgText
+				+ "</span>  <span style='color:" + grey + "'>(</span><span style='color:" + toHex(profitColor)
+				+ "'>" + sign + GpFormat.shortValue(profit) + "</span><span style='color:" + grey + "'>)</span></html>");
+		compactTotalsValueLabel.setToolTipText("<html>" + NUMBER_FORMAT.format(totalAvg) + " gp<br>Profit: "
+				+ sign + NUMBER_FORMAT.format(profit) + " gp</html>");
 	}
 
 	private void equalizeTotalsLabelWidths()
@@ -950,9 +1175,13 @@ public class StockpilePanel extends PluginPanel
 	 * for items whose price moved.
 	 */
 	public void rebuild(List<TrackedItem> items, Instant newLastPriceRefresh,
-			PriceIndicatorMode indicatorMode, boolean loggedIn)
+			PriceIndicatorMode indicatorMode, boolean loggedIn,
+			List<CategoryState> categories, boolean favoritesCollapsed, boolean uncategorizedCollapsed)
 	{
 		this.lastPriceRefresh = newLastPriceRefresh;
+		this.categories = categories != null ? categories : new ArrayList<>();
+		this.favoritesCollapsed = favoritesCollapsed;
+		this.uncategorizedCollapsed = uncategorizedCollapsed;
 		trackedItemIds.clear();
 		currentItems.clear();
 		orderedItemIds.clear();
@@ -1010,11 +1239,10 @@ public class StockpilePanel extends PluginPanel
 			loadingLabels.clear();
 			pulseEntries.clear();
 			clearButton.setEnabled(!trackedItemIds.isEmpty());
-			reorderStrips.clear();
+			updateCompactToggle();
 			totalHighDeltaLabel.setText("");
 			totalLowDeltaLabel.setText("");
 			totalAvgDeltaLabel.setText("");
-			trackedItemsPanel.removeAll();
 
 			long totalHigh = 0, totalLow = 0, totalAvg = 0;
 			long totalCostBasis = 0;
@@ -1027,47 +1255,33 @@ public class StockpilePanel extends PluginPanel
 			boolean showEstAvg = config.showEstAvg();
 			boolean showEstProfit = config.showEstProfit();
 
-			if (items.isEmpty())
+			for (TrackedItem item : items)
 			{
-				PluginErrorPanel errorPanel = new PluginErrorPanel();
-				errorPanel.setContent("No items tracked", "Search above to add an item to track.");
-
-				JPanel emptyWrapper = new JPanel(new BorderLayout());
-				emptyWrapper.setBackground(ColorScheme.DARK_GRAY_COLOR);
-				emptyWrapper.add(errorPanel, BorderLayout.CENTER);
-				trackedItemsPanel.add(emptyWrapper);
-			}
-			else
-			{
-				for (TrackedItem item : items)
+				totalHigh += item.getHighValue();
+				totalLow  += item.getLowValue();
+				totalAvg  += item.getAvgValue();
+				if (item.isCostBasisInitialized())
 				{
-					totalHigh += item.getHighValue();
-					totalLow  += item.getLowValue();
-					totalAvg  += item.getAvgValue();
-					if (item.isCostBasisInitialized())
-					{
-						totalCostBasis += item.getCostBasis();
-						anyProfitData = true;
-					}
+					totalCostBasis += item.getCostBasis();
+					anyProfitData = true;
+				}
 
-					if (item.isHasDeltas())
-					{
-						anyDeltas = true;
-						prevPriceTotalHigh += (long) item.getQuantity() * item.getPrevHighPrice();
-						prevPriceTotalLow  += (long) item.getQuantity() * item.getPrevLowPrice();
-						prevPriceTotalAvg  += (long) item.getQuantity() * item.getPrevAvgPrice();
-					}
-					else
-					{
-						prevPriceTotalHigh += item.getHighValue();
-						prevPriceTotalLow  += item.getLowValue();
-						prevPriceTotalAvg  += item.getAvgValue();
-					}
-
-					trackedItemsPanel.add(buildTrackedItemRow(item, indicatorMode));
-					trackedItemsPanel.add(Box.createVerticalStrut(4));
+				if (item.isHasDeltas())
+				{
+					anyDeltas = true;
+					prevPriceTotalHigh += (long) item.getQuantity() * item.getPrevHighPrice();
+					prevPriceTotalLow  += (long) item.getQuantity() * item.getPrevLowPrice();
+					prevPriceTotalAvg  += (long) item.getQuantity() * item.getPrevAvgPrice();
+				}
+				else
+				{
+					prevPriceTotalHigh += item.getHighValue();
+					prevPriceTotalLow  += item.getLowValue();
+					prevPriceTotalAvg  += item.getAvgValue();
 				}
 			}
+
+			renderTrackedRows(items, indicatorMode);
 
 			boolean hasPrices = items.stream().anyMatch(TrackedItem::hasPrices);
 
@@ -1092,7 +1306,7 @@ public class StockpilePanel extends PluginPanel
 			}
 
 			equalizeTotalsLabelWidths();
-			bottomPanel.setVisible(config.showGeEstimates());
+			bottomPanel.setVisible(config.showGeEstimates() && !reorderMode);
 			applyEstimatesPosition(config.geEstimatesPosition());
 			applyEstimatesSpacing(config.geEstimatesSpacing());
 
@@ -1117,9 +1331,704 @@ public class StockpilePanel extends PluginPanel
 			else
 				profitSection.setVisible(false);
 
+			boolean compact = config.compactView();
+			totalsRows.setVisible(!compact);
+			compactTotalsRows.setVisible(compact);
+			if (compact)
+				updateCompactTotals(items.size(), totalAvg, totalCostBasis, hasPrices,
+						anyProfitData && showEstProfit, totalFmt);
+
 			trackedItemsPanel.revalidate();
 			trackedItemsPanel.repaint();
 		});
+	}
+
+	/**
+	 * Clears and re-renders the tracked-item rows (empty placeholder, or the grouped rows),
+	 * retaining the inputs so {@link #toggleReorderMode()} can re-render the manage layout
+	 * without a full plugin refresh.
+	 */
+	private void renderTrackedRows(List<TrackedItem> items, PriceIndicatorMode indicatorMode)
+	{
+		lastRenderItems = items;
+		lastRenderIndicatorMode = indicatorMode;
+
+		trackedItemsPanel.removeAll();
+
+		if (items.isEmpty())
+		{
+			PluginErrorPanel errorPanel = new PluginErrorPanel();
+			errorPanel.setContent("No items tracked", "Search above to add an item to track.");
+
+			JPanel emptyWrapper = new JPanel(new BorderLayout());
+			emptyWrapper.setBackground(ColorScheme.DARK_GRAY_COLOR);
+			emptyWrapper.add(errorPanel, BorderLayout.CENTER);
+			trackedItemsPanel.add(emptyWrapper);
+		}
+		else
+			renderGroupedRows(items, indicatorMode);
+
+		trackedItemsPanel.revalidate();
+		trackedItemsPanel.repaint();
+	}
+
+	/**
+	 * Renders the tracked rows into {@link #trackedItemsPanel}, grouped into the Favorites
+	 * pseudo-group (pinned on top), then each user category in order, then Uncategorized.
+	 * Falls back to a flat, header-less list when no favorites and no categories exist, so
+	 * users who don't use grouping see the list exactly as before. Empty groups are skipped.
+	 */
+	private void renderGroupedRows(List<TrackedItem> items, PriceIndicatorMode indicatorMode)
+	{
+		boolean hasFavorites = false;
+		for (TrackedItem item : items)
+			if (item.isFavorite())
+			{
+				hasFavorites = true;
+				break;
+			}
+
+		groupingActive = hasFavorites || !categories.isEmpty();
+
+		if (!groupingActive)
+		{
+			List<TrackedItem> visible = new ArrayList<>();
+			for (TrackedItem item : items)
+				if (matchesFilter(item))
+					visible.add(item);
+
+			for (TrackedItem item : visible)
+				addItemRow(item, indicatorMode, visible);
+
+			return;
+		}
+
+		Set<String> categoryNames = new java.util.HashSet<>();
+		for (CategoryState cat : categories)
+			categoryNames.add(cat.getName());
+
+		List<TrackedItem> favorites = new ArrayList<>();
+		for (TrackedItem item : items)
+			if (item.isFavorite() && matchesFilter(item))
+				favorites.add(item);
+
+		renderGroup("★ Favorites", CategoryState.FAVORITES_KEY, favoritesCollapsed, favorites, indicatorMode);
+
+		for (CategoryState cat : categories)
+		{
+			List<TrackedItem> inCategory = new ArrayList<>();
+			for (TrackedItem item : items)
+				if (!item.isFavorite() && cat.getName().equals(item.getCategory()) && matchesFilter(item))
+					inCategory.add(item);
+
+			renderGroup(cat.getName(), cat.getName(), cat.isCollapsed(), inCategory, indicatorMode);
+		}
+
+		List<TrackedItem> uncategorized = new ArrayList<>();
+		for (TrackedItem item : items)
+		{
+			String cat = item.getCategory();
+			boolean uncat = cat == null || cat.isEmpty() || !categoryNames.contains(cat);
+			if (!item.isFavorite() && uncat && matchesFilter(item))
+				uncategorized.add(item);
+		}
+
+		renderGroup("Uncategorized", CategoryState.UNCATEGORIZED_KEY, uncategorizedCollapsed, uncategorized, indicatorMode);
+	}
+
+	/** @return whether the item matches the active tracked-list name filter (always true when the filter is empty). */
+	private boolean matchesFilter(TrackedItem item)
+	{
+		return trackedFilter.isEmpty() || item.getName().toLowerCase().contains(trackedFilter);
+	}
+
+	/** Re-renders the rows against the updated tracked-list filter text. */
+	private void onTrackedFilterChanged()
+	{
+		String text = trackedFilterField.getText();
+		trackedFilter = text == null ? "" : text.trim().toLowerCase();
+		renderTrackedRows(lastRenderItems, lastRenderIndicatorMode);
+	}
+
+	/** Toggles the tracked-list filter field via the header filter button, focusing it when shown. */
+	private void toggleTrackedFilter()
+	{
+		boolean show = !trackedFilterField.isVisible();
+		setTrackedFilterVisible(show);
+		updateFilterToggle();
+
+		if (show)
+			trackedFilterField.requestFocusInWindow();
+	}
+
+	/** Sets the filter field's visibility, clearing any active filter when it is hidden. */
+	private void setTrackedFilterVisible(boolean visible)
+	{
+		if (visible == trackedFilterField.isVisible())
+			return;
+
+		trackedFilterField.setVisible(visible);
+
+		if (!visible && !trackedFilter.isEmpty())
+		{
+			trackedFilter = "";
+			trackedFilterField.setText("");
+			renderTrackedRows(lastRenderItems, lastRenderIndicatorMode);
+		}
+
+		trackedFilterField.revalidate();
+		trackedFilterField.repaint();
+	}
+
+	/** Updates the header filter button's funnel icon, tinting it gold while the filter field is shown. */
+	private void updateFilterToggle()
+	{
+		if (filterToggle != null)
+			filterToggle.setIcon(filterIcon(trackedFilterField != null && trackedFilterField.isVisible()
+					? COLOR_AVG : ColorScheme.LIGHT_GRAY_COLOR));
+	}
+
+	/** Paints a small monochrome funnel (filter) icon in the given colour. */
+	private static Icon filterIcon(Color color)
+	{
+		int size = 14;
+		BufferedImage img = new BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB);
+		Graphics2D g = img.createGraphics();
+		g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+		g.setColor(color);
+
+		// Funnel: a wide top bar tapering to a narrow central stem.
+		g.fillPolygon(
+				new int[]{1, size - 1, size / 2 + 1, size / 2 + 1, size / 2 - 1, size / 2 - 1},
+				new int[]{2, 2, size / 2, size - 1, size - 1, size / 2},
+				6);
+
+		g.dispose();
+		return new ImageIcon(img);
+	}
+
+	/** Renders one collapsible group: a clickable header plus its rows, unless empty (skipped) or collapsed (header only). */
+	private void renderGroup(String title, String groupKey, boolean collapsed,
+			List<TrackedItem> groupItems, PriceIndicatorMode indicatorMode)
+	{
+		if (groupItems.isEmpty())
+			return;
+
+		long groupTotal = 0;
+		for (TrackedItem item : groupItems)
+			groupTotal += item.getAvgValue();
+
+		trackedItemsPanel.add(buildGroupHeader(title, groupKey, collapsed, groupTotal));
+		trackedItemsPanel.add(Box.createVerticalStrut(4));
+
+		if (collapsed)
+			return;
+
+		for (TrackedItem item : groupItems)
+			addItemRow(item, indicatorMode, groupItems);
+	}
+
+	/** Adds a single tracked-item row plus its trailing spacer; {@code groupItems} scopes reorder within the group. */
+	private void addItemRow(TrackedItem item, PriceIndicatorMode indicatorMode, List<TrackedItem> groupItems)
+	{
+		trackedItemsPanel.add(buildTrackedItemRow(item, indicatorMode, groupItems));
+		trackedItemsPanel.add(Box.createVerticalStrut(4));
+	}
+
+	/** @return the position of {@code itemId} within {@code list}, or -1 if absent. */
+	private static int indexOfItem(List<TrackedItem> list, int itemId)
+	{
+		for (int i = 0; i < list.size(); i++)
+			if (list.get(i).getItemId() == itemId)
+				return i;
+
+		return -1;
+	}
+
+	/** Builds a clickable accordion header (chevron + title + group total value) that toggles the group's collapsed state. */
+	private JPanel buildGroupHeader(String title, String groupKey, boolean collapsed, long groupTotal)
+	{
+		JPanel header = new JPanel(new BorderLayout(6, 0))
+		{
+			@Override
+			public Dimension getMaximumSize()
+			{
+				return new Dimension(Integer.MAX_VALUE, getPreferredSize().height);
+			}
+		};
+		header.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		header.setBorder(new EmptyBorder(4, 2, 2, 4));
+		header.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+		header.putClientProperty(GROUP_HEADER_KEY, Boolean.TRUE);
+
+		JLabel chevron = new JLabel(collapsed ? "▸" : "▾");
+		chevron.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		chevron.setFont(FontManager.getRunescapeSmallFont());
+
+		JLabel titleLabel = new JLabel(title);
+		titleLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		titleLabel.setFont(FontManager.getRunescapeBoldFont());
+
+		JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+		left.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		left.add(chevron);
+		left.add(titleLabel);
+
+		JLabel totalLabel = new JLabel(GpFormat.shortValue(groupTotal));
+		totalLabel.setForeground(new Color(150, 150, 150));
+		totalLabel.setFont(FontManager.getRunescapeSmallFont());
+		totalLabel.setToolTipText(NUMBER_FORMAT.format(groupTotal) + " gp");
+
+		header.add(left, BorderLayout.WEST);
+		header.add(totalLabel, BorderLayout.EAST);
+		header.addMouseListener(new MouseAdapter()
+		{
+			@Override
+			public void mouseClicked(MouseEvent e)
+			{
+				if (onSetGroupCollapsed != null)
+					onSetGroupCollapsed.accept(groupKey, !collapsed);
+			}
+		});
+
+		return header;
+	}
+
+	private static final Color STAR_HIDDEN = new Color(0, 0, 0, 0);
+	private static final Color STAR_DIM = new Color(110, 110, 110);
+	private static final Color STAR_PREVIEW = new Color(255, 235, 140);
+	private static final String STAR_ROW_HOVERED = "stockpile.starRowHovered";
+	private static final String STAR_HOVERED = "stockpile.starHovered";
+
+	/**
+	 * Builds the favorite-toggle star shown beneath each row's remove button. Like the
+	 * remove button it is hidden until the row is hovered; hovering the star itself previews
+	 * the toggle (fills light gold to add a favorite, or drops the gold to remove one).
+	 */
+	private JLabel buildFavoriteStar(TrackedItem item)
+	{
+		JLabel star = new JLabel("★", SwingConstants.CENTER);
+		star.setPreferredSize(new Dimension(20, 20));
+		star.setMaximumSize(new Dimension(20, 20));
+		star.setFont(FontManager.getRunescapeSmallFont());
+		star.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+		star.setToolTipText(item.isFavorite() ? "Remove from favorites" : "Add to favorites");
+		star.putClientProperty(STAR_ROW_HOVERED, false);
+		star.putClientProperty(STAR_HOVERED, false);
+		star.addMouseListener(new MouseAdapter()
+		{
+			@Override
+			public void mouseClicked(MouseEvent e)
+			{
+				if (onSetFavorite != null)
+					onSetFavorite.accept(item.getItemId(), !item.isFavorite());
+			}
+
+			@Override
+			public void mouseEntered(MouseEvent e)
+			{
+				star.putClientProperty(STAR_HOVERED, true);
+				refreshFavoriteStar(star, item.isFavorite());
+			}
+
+			@Override
+			public void mouseExited(MouseEvent e)
+			{
+				star.putClientProperty(STAR_HOVERED, false);
+				refreshFavoriteStar(star, item.isFavorite());
+			}
+		});
+
+		refreshFavoriteStar(star, item.isFavorite());
+
+		return star;
+	}
+
+	/**
+	 * Applies a favorite star's visual from its row-hover/star-hover client flags: hidden
+	 * when its row isn't hovered, the resting gold/grey glyph when the row is hovered, and a
+	 * preview (light-gold fill to add, or grey outline to remove) when the star itself is hovered.
+	 */
+	private void refreshFavoriteStar(JLabel star, boolean favorite)
+	{
+		boolean rowHovered = Boolean.TRUE.equals(star.getClientProperty(STAR_ROW_HOVERED));
+		boolean starHovered = Boolean.TRUE.equals(star.getClientProperty(STAR_HOVERED));
+
+		if (!rowHovered)
+		{
+			star.setText(favorite ? "★" : "☆");
+			star.setForeground(STAR_HIDDEN);
+			return;
+		}
+
+		if (starHovered)
+		{
+			star.setText(favorite ? "☆" : "★");
+			star.setForeground(favorite ? STAR_DIM : STAR_PREVIEW);
+		}
+		else
+		{
+			star.setText(favorite ? "★" : "☆");
+			star.setForeground(favorite ? COLOR_AVG : STAR_DIM);
+		}
+	}
+
+	private static final String UNCATEGORIZED_LABEL = "Uncategorized";
+	private static final String NEW_CATEGORY_LABEL = "+ New category…";
+
+	/**
+	 * Builds the per-row category picker used in the manage row: assigns the item to an existing
+	 * category, clears it to Uncategorized, or prompts to create-and-assign a new one.
+	 */
+	private JComboBox<String> buildCategoryPicker(TrackedItem item)
+	{
+		JComboBox<String> picker = new JComboBox<>();
+		picker.setFont(FontManager.getRunescapeSmallFont());
+		picker.addItem(UNCATEGORIZED_LABEL);
+		for (CategoryState cat : categories)
+			picker.addItem(cat.getName());
+
+		picker.addItem(NEW_CATEGORY_LABEL);
+
+		final String current = item.getCategory();
+		final String currentSelection = current == null || current.isEmpty() ? UNCATEGORIZED_LABEL : current;
+		picker.setSelectedItem(currentSelection);
+
+		picker.addActionListener(e ->
+		{
+			String selected = (String) picker.getSelectedItem();
+			if (selected == null || selected.equals(currentSelection))
+				return;
+
+			if (NEW_CATEGORY_LABEL.equals(selected))
+			{
+				String name = JOptionPane.showInputDialog(this, "New category name:",
+						"New Category", JOptionPane.PLAIN_MESSAGE);
+				if (name != null && !name.trim().isEmpty())
+				{
+					categoryActions.create(name.trim());
+					categoryActions.setItemCategory(item.getItemId(), name.trim());
+				}
+				else
+					picker.setSelectedItem(currentSelection);
+
+				return;
+			}
+
+			categoryActions.setItemCategory(item.getItemId(),
+					UNCATEGORIZED_LABEL.equals(selected) ? null : selected);
+		});
+
+		return picker;
+	}
+
+	/**
+	 * Opens the modal Manage Categories dialog: create, rename, delete, and reorder categories.
+	 * Each action updates the dialog's list immediately and forwards to the plugin via
+	 * {@link #categoryActions}, which persists and rebuilds the panel.
+	 */
+	private void openManageCategoriesDialog()
+	{
+		JDialog dialog = new JDialog(SwingUtilities.getWindowAncestor(this), "Manage Categories");
+		dialog.setModal(true);
+
+		DefaultListModel<String> model = new DefaultListModel<>();
+		for (CategoryState cat : categories)
+			model.addElement(cat.getName());
+
+		JList<String> list = new JList<>(model);
+		list.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+
+		JButton newBtn = new JButton("New");
+		newBtn.addActionListener(e ->
+		{
+			String name = JOptionPane.showInputDialog(dialog, "Category name:",
+					"New Category", JOptionPane.PLAIN_MESSAGE);
+			if (name == null || name.trim().isEmpty())
+				return;
+
+			String trimmed = name.trim();
+			if (containsIgnoreCase(model, trimmed))
+				return;
+
+			model.addElement(trimmed);
+			categoryActions.create(trimmed);
+		});
+
+		JButton renameBtn = new JButton("Rename");
+		renameBtn.addActionListener(e ->
+		{
+			int i = list.getSelectedIndex();
+			if (i < 0)
+				return;
+
+			String old = model.get(i);
+			Object input = JOptionPane.showInputDialog(dialog, "Rename category:",
+					"Rename", JOptionPane.PLAIN_MESSAGE, null, null, old);
+			if (input == null || input.toString().trim().isEmpty())
+				return;
+
+			String trimmed = input.toString().trim();
+			if (trimmed.equals(old) || containsIgnoreCase(model, trimmed))
+				return;
+
+			model.set(i, trimmed);
+			categoryActions.rename(old, trimmed);
+		});
+
+		JButton deleteBtn = new JButton("Delete");
+		deleteBtn.addActionListener(e ->
+		{
+			int i = list.getSelectedIndex();
+			if (i < 0)
+				return;
+
+			String name = model.get(i);
+			int choice = JOptionPane.showConfirmDialog(dialog,
+					"Delete category \"" + name + "\"? Its items move to Uncategorized.",
+					"Delete Category", JOptionPane.YES_NO_OPTION);
+			if (choice == JOptionPane.YES_OPTION)
+			{
+				model.remove(i);
+				categoryActions.delete(name);
+			}
+		});
+
+		JButton upBtn = new JButton("↑");
+		upBtn.addActionListener(e -> moveCategoryInDialog(list, model, -1));
+
+		JButton downBtn = new JButton("↓");
+		downBtn.addActionListener(e -> moveCategoryInDialog(list, model, 1));
+
+		JPanel actions = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
+		actions.add(newBtn);
+		actions.add(renameBtn);
+		actions.add(deleteBtn);
+		actions.add(upBtn);
+		actions.add(downBtn);
+
+		JScrollPane scroll = new JScrollPane(list);
+		scroll.setPreferredSize(new Dimension(220, 200));
+
+		JPanel content = new JPanel(new BorderLayout(0, 6));
+		content.setBorder(new EmptyBorder(8, 8, 8, 8));
+		content.add(scroll, BorderLayout.CENTER);
+		content.add(actions, BorderLayout.SOUTH);
+
+		dialog.setContentPane(content);
+		dialog.pack();
+		dialog.setLocationRelativeTo(this);
+		dialog.setVisible(true);
+	}
+
+	/** Moves the selected dialog category by {@code delta} and forwards the new index to the plugin. */
+	private void moveCategoryInDialog(JList<String> list, DefaultListModel<String> model, int delta)
+	{
+		int i = list.getSelectedIndex();
+		if (i < 0)
+			return;
+
+		int j = i + delta;
+		if (j < 0 || j >= model.size())
+			return;
+
+		String name = model.remove(i);
+		model.add(j, name);
+		list.setSelectedIndex(j);
+		categoryActions.reorder(name, j);
+	}
+
+	/** @return whether the list model already contains {@code value}, ignoring case. */
+	private static boolean containsIgnoreCase(DefaultListModel<String> model, String value)
+	{
+		for (int i = 0; i < model.size(); i++)
+			if (model.get(i).equalsIgnoreCase(value))
+				return true;
+
+		return false;
+	}
+
+	/** Builds an 18px item-icon label backed by {@link #rowIconCache}, loading asynchronously on a miss. */
+	private JLabel buildRowIcon(TrackedItem item)
+	{
+		JLabel iconLabel = new JLabel();
+		iconLabel.setVerticalAlignment(SwingConstants.CENTER);
+		iconLabel.setHorizontalAlignment(SwingConstants.CENTER);
+
+		ImageIcon cached = rowIconCache.get(item.getItemId());
+		if (cached != null)
+			iconLabel.setIcon(cached);
+		else
+		{
+			AsyncBufferedImage icon = itemManager.getImage(item.getItemId());
+			icon.onLoaded(() ->
+			{
+				ImageIcon scaled = new ImageIcon(icon.getScaledInstance(18, 18, Image.SCALE_SMOOTH));
+				rowIconCache.put(item.getItemId(), scaled);
+				iconLabel.setIcon(scaled);
+			});
+		}
+
+		return iconLabel;
+	}
+
+	/**
+	 * Builds the dedicated manage-mode row: a stripped-down layout showing only what's needed to
+	 * organise items. A left column of reorder controls (up/down, plus drag when ungrouped), a
+	 * middle column with the icon+name over a category picker, and a right column with the
+	 * always-visible remove and favorite controls. All price/quantity/profit content is omitted.
+	 */
+	private JPanel buildManageRow(TrackedItem item, List<TrackedItem> groupItems)
+	{
+		JPanel card = new JPanel(new BorderLayout(6, 0))
+		{
+			@Override
+			public Dimension getMaximumSize()
+			{
+				return new Dimension(Integer.MAX_VALUE, getPreferredSize().height);
+			}
+		};
+		card.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		card.setBorder(new EmptyBorder(6, 8, 6, 8));
+		card.putClientProperty(ROW_ITEM_ID, item.getItemId());
+
+		card.add(buildReorderStrip(item, groupItems), BorderLayout.WEST);
+
+		JLabel nameLabel = new JLabel();
+		nameLabel.setForeground(Color.WHITE);
+		nameLabel.setFont(FontManager.getRunescapeBoldFont());
+		setEllipsisText(nameLabel, item.getName());
+
+		JPanel nameRow = new JPanel(new BorderLayout(6, 0));
+		nameRow.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		nameRow.add(buildRowIcon(item), BorderLayout.WEST);
+		nameRow.add(nameLabel, BorderLayout.CENTER);
+
+		JPanel center = new JPanel();
+		center.setLayout(new BoxLayout(center, BoxLayout.Y_AXIS));
+		center.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		nameRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+		JComboBox<String> picker = buildCategoryPicker(item);
+		picker.setAlignmentX(Component.LEFT_ALIGNMENT);
+		center.add(nameRow);
+		center.add(Box.createVerticalStrut(4));
+		center.add(picker);
+		card.add(center, BorderLayout.CENTER);
+
+		card.add(buildManageEastControls(item), BorderLayout.EAST);
+
+		return card;
+	}
+
+	/** Builds the left reorder column (up/down, plus a drag handle when the list isn't grouped) for the manage row. */
+	private JPanel buildReorderStrip(TrackedItem item, List<TrackedItem> groupItems)
+	{
+		final Color controlColor = new Color(150, 150, 150);
+		final Color controlDim = new Color(80, 80, 80);
+
+		final int groupPos = indexOfItem(groupItems, item.getItemId());
+		final boolean canUp = groupPos > 0;
+		final boolean canDown = groupPos >= 0 && groupPos < groupItems.size() - 1;
+		final int upTarget = canUp ? orderedItemIds.indexOf(groupItems.get(groupPos - 1).getItemId()) : -1;
+		final int downTarget = canDown ? orderedItemIds.indexOf(groupItems.get(groupPos + 1).getItemId()) : -1;
+
+		JButton upBtn = makeRowControl("▲", "Move up");
+		upBtn.setForeground(canUp ? controlColor : controlDim);
+		upBtn.addActionListener(e ->
+		{
+			if (canUp && upTarget >= 0 && onReorder != null)
+				onReorder.accept(item.getItemId(), upTarget);
+		});
+
+		JButton downBtn = makeRowControl("▼", "Move down");
+		downBtn.setForeground(canDown ? controlColor : controlDim);
+		downBtn.addActionListener(e ->
+		{
+			if (canDown && downTarget >= 0 && onReorder != null)
+				onReorder.accept(item.getItemId(), downTarget);
+		});
+
+		JLabel dragHandle = new JLabel("≡", SwingConstants.CENTER);
+		dragHandle.setPreferredSize(new Dimension(20, 20));
+		dragHandle.setForeground(controlColor);
+		dragHandle.setFont(FontManager.getRunescapeSmallFont());
+		dragHandle.setCursor(Cursor.getPredefinedCursor(Cursor.MOVE_CURSOR));
+		dragHandle.setToolTipText("Drag to reorder");
+		installDragHandle(dragHandle, item.getItemId());
+
+		JPanel strip = new JPanel();
+		strip.setLayout(new BoxLayout(strip, BoxLayout.Y_AXIS));
+		strip.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		strip.setBorder(new EmptyBorder(0, 0, 0, 6));
+		upBtn.setAlignmentX(Component.CENTER_ALIGNMENT);
+		downBtn.setAlignmentX(Component.CENTER_ALIGNMENT);
+		dragHandle.setAlignmentX(Component.CENTER_ALIGNMENT);
+		strip.add(Box.createVerticalGlue());
+		strip.add(upBtn);
+		strip.add(dragHandle);
+		strip.add(downBtn);
+		strip.add(Box.createVerticalGlue());
+
+		return strip;
+	}
+
+	/** Builds the right column of the manage row: an always-visible remove button stacked over a favorite star. */
+	private JPanel buildManageEastControls(TrackedItem item)
+	{
+		JButton removeBtn = new JButton("✕");
+		removeBtn.setPreferredSize(new Dimension(20, 20));
+		removeBtn.setMaximumSize(new Dimension(20, 20));
+		removeBtn.setMargin(new Insets(0, 0, 0, 0));
+		removeBtn.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		removeBtn.setForeground(new Color(200, 60, 60));
+		removeBtn.setFont(FontManager.getRunescapeSmallFont());
+		removeBtn.setFocusPainted(false);
+		removeBtn.setBorderPainted(false);
+		removeBtn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+		removeBtn.setToolTipText("Remove from tracking");
+		removeBtn.setAlignmentX(Component.CENTER_ALIGNMENT);
+		removeBtn.addActionListener(e -> onRemoveItem.accept(item.getItemId()));
+
+		JLabel star = new JLabel(item.isFavorite() ? "★" : "☆", SwingConstants.CENTER);
+		star.setPreferredSize(new Dimension(20, 20));
+		star.setMaximumSize(new Dimension(20, 20));
+		star.setAlignmentX(Component.CENTER_ALIGNMENT);
+		star.setFont(FontManager.getRunescapeSmallFont());
+		star.setForeground(item.isFavorite() ? COLOR_AVG : STAR_DIM);
+		star.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+		star.setToolTipText(item.isFavorite() ? "Remove from favorites" : "Add to favorites");
+		star.addMouseListener(new MouseAdapter()
+		{
+			@Override
+			public void mouseClicked(MouseEvent e)
+			{
+				if (onSetFavorite != null)
+					onSetFavorite.accept(item.getItemId(), !item.isFavorite());
+			}
+
+			@Override
+			public void mouseEntered(MouseEvent e)
+			{
+				star.setText(item.isFavorite() ? "☆" : "★");
+				star.setForeground(item.isFavorite() ? STAR_DIM : STAR_PREVIEW);
+			}
+
+			@Override
+			public void mouseExited(MouseEvent e)
+			{
+				star.setText(item.isFavorite() ? "★" : "☆");
+				star.setForeground(item.isFavorite() ? COLOR_AVG : STAR_DIM);
+			}
+		});
+
+		JPanel east = new JPanel();
+		east.setLayout(new BoxLayout(east, BoxLayout.Y_AXIS));
+		east.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		east.add(removeBtn);
+		east.add(Box.createVerticalStrut(4));
+		east.add(star);
+
+		return east;
 	}
 
 	/**
@@ -1127,8 +2036,12 @@ public class StockpilePanel extends PluginPanel
 	 * the configured data rows (prices/value/volume/profit), hover affordances,
 	 * and a click handler that opens the item's detail view.
 	 */
-	private JPanel buildTrackedItemRow(TrackedItem item, PriceIndicatorMode indicatorMode)
+	private JPanel buildTrackedItemRow(TrackedItem item, PriceIndicatorMode indicatorMode,
+			List<TrackedItem> groupItems)
 	{
+		if (reorderMode)
+			return buildManageRow(item, groupItems);
+
 		final PriceIndicatorMode itemIndicatorMode = item.isHasDeltas() ? indicatorMode : PriceIndicatorMode.OFF;
 		final boolean hovered = item.getItemId() == hoveredItemId;
 		final List<TimeWindow> rowWindows = Arrays.asList(config.row1Data(), config.row2Data(), config.row3Data());
@@ -1180,57 +2093,15 @@ public class StockpilePanel extends PluginPanel
 		removeBtn.setToolTipText("Remove from tracking");
 		removeBtn.addActionListener(e -> onRemoveItem.accept(item.getItemId()));
 
-		final int index = orderedItemIds.indexOf(item.getItemId());
-		final int count = orderedItemIds.size();
-		final boolean canUp = index > 0;
-		final boolean canDown = index >= 0 && index < count - 1;
+		JLabel favStar = buildFavoriteStar(item);
+		removeBtn.setAlignmentX(Component.CENTER_ALIGNMENT);
+		favStar.setAlignmentX(Component.CENTER_ALIGNMENT);
 
-		final Color CONTROL_COLOR = new Color(150, 150, 150);
-		final Color CONTROL_DIM = new Color(80, 80, 80);
-
-		JButton upBtn = makeRowControl("▲", "Move up");
-		upBtn.setForeground(canUp ? CONTROL_COLOR : CONTROL_DIM);
-		upBtn.addActionListener(e ->
-		{
-			if (canUp && onReorder != null)
-				onReorder.accept(item.getItemId(), index - 1);
-		});
-
-		JButton downBtn = makeRowControl("▼", "Move down");
-		downBtn.setForeground(canDown ? CONTROL_COLOR : CONTROL_DIM);
-		downBtn.addActionListener(e ->
-		{
-			if (canDown && onReorder != null)
-				onReorder.accept(item.getItemId(), index + 1);
-		});
-
-		JLabel dragHandle = new JLabel("≡", SwingConstants.CENTER);
-		dragHandle.setPreferredSize(new Dimension(20, 20));
-		dragHandle.setForeground(CONTROL_COLOR);
-		dragHandle.setFont(FontManager.getRunescapeSmallFont());
-		dragHandle.setCursor(Cursor.getPredefinedCursor(Cursor.MOVE_CURSOR));
-		dragHandle.setToolTipText("Drag to reorder");
-		installDragHandle(dragHandle, item.getItemId());
-
-		JPanel reorderStrip = new JPanel();
-		reorderStrip.setLayout(new BoxLayout(reorderStrip, BoxLayout.Y_AXIS));
-		reorderStrip.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-		reorderStrip.setBorder(new EmptyBorder(0, 0, 0, 6));
-		upBtn.setAlignmentX(Component.CENTER_ALIGNMENT);
-		downBtn.setAlignmentX(Component.CENTER_ALIGNMENT);
-		dragHandle.setAlignmentX(Component.CENTER_ALIGNMENT);
-		reorderStrip.add(Box.createVerticalGlue());
-		reorderStrip.add(upBtn);
-		reorderStrip.add(dragHandle);
-		reorderStrip.add(downBtn);
-		reorderStrip.add(Box.createVerticalGlue());
-		reorderStrip.setVisible(reorderMode);
-		reorderStrips.add(reorderStrip);
-		card.add(reorderStrip, BorderLayout.WEST);
-
-		JPanel eastPanel = new JPanel(new BorderLayout());
+		JPanel eastPanel = new JPanel();
+		eastPanel.setLayout(new BoxLayout(eastPanel, BoxLayout.Y_AXIS));
 		eastPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-		eastPanel.add(removeBtn, BorderLayout.NORTH);
+		eastPanel.add(removeBtn);
+		eastPanel.add(favStar);
 		card.add(eastPanel, BorderLayout.EAST);
 
 		JPanel centerPanel = new JPanel();
@@ -1257,6 +2128,14 @@ public class StockpilePanel extends PluginPanel
 			nameRow.add(qtyLabel, BorderLayout.EAST);
 
 		centerPanel.add(nameRow);
+
+		if (config.compactView())
+		{
+			centerPanel.add(buildCompactValueRow(item));
+			card.add(centerPanel, BorderLayout.CENTER);
+			installRowHover(card, item, removeBtn, favStar, REMOVE_COLOR, REMOVE_HIDDEN);
+			return card;
+		}
 
 		final JLabel highLabel;
 		final JLabel lowLabel;
@@ -1467,15 +2346,27 @@ public class StockpilePanel extends PluginPanel
 		}
 
 		card.add(centerPanel, BorderLayout.CENTER);
+		installRowHover(card, item, removeBtn, favStar, REMOVE_COLOR, REMOVE_HIDDEN);
 
+		return card;
+	}
+
+	/**
+	 * Wires the shared row hover behaviour onto a tracked-item card: clicking the row
+	 * (other than the remove button or the favorite star) opens the detail view, and
+	 * entering/leaving the card tracks {@link #hoveredItemId} and reveals/hides the remove
+	 * button and favorite star.
+	 */
+	private void installRowHover(JPanel card, TrackedItem item, JButton removeBtn, JLabel favStar,
+			Color removeColor, Color removeHidden)
+	{
 		card.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 		MouseAdapter hoverListener = new MouseAdapter()
 		{
 			@Override
 			public void mouseClicked(MouseEvent e)
 			{
-				if (e.getSource() == removeBtn || e.getSource() == upBtn
-						|| e.getSource() == downBtn || e.getSource() == dragHandle)
+				if (e.getSource() == removeBtn || e.getSource() == favStar)
 					return;
 
 				showDetail(item.getItemId());
@@ -1485,7 +2376,9 @@ public class StockpilePanel extends PluginPanel
 			public void mouseEntered(MouseEvent e)
 			{
 				hoveredItemId = item.getItemId();
-				removeBtn.setForeground(REMOVE_COLOR);
+				removeBtn.setForeground(removeColor);
+				favStar.putClientProperty(STAR_ROW_HOVERED, true);
+				refreshFavoriteStar(favStar, item.isFavorite());
 			}
 
 			@Override
@@ -1497,13 +2390,53 @@ public class StockpilePanel extends PluginPanel
 					if (hoveredItemId == item.getItemId())
 						hoveredItemId = -1;
 
-					removeBtn.setForeground(REMOVE_HIDDEN);
+					removeBtn.setForeground(removeHidden);
+					favStar.putClientProperty(STAR_ROW_HOVERED, false);
+					favStar.putClientProperty(STAR_HOVERED, false);
+					refreshFavoriteStar(favStar, item.isFavorite());
 				}
 			}
 		};
 		addListenerRecursively(card, hoverListener);
+	}
 
-		return card;
+	/**
+	 * Builds the compact-view row-2 value line: {@code total value (single item value)}, both
+	 * in short format and both derived from the latest avg-of-1 price (e.g. {@code 4.86m (1.62m)}).
+	 * Falls back to a muted placeholder when the item has no prices.
+	 */
+	private JPanel buildCompactValueRow(TrackedItem item)
+	{
+		JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+		row.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		row.setAlignmentX(Component.LEFT_ALIGNMENT);
+		row.setBorder(new EmptyBorder(2, 4, 0, 0));
+
+		if (!item.hasPrices())
+		{
+			JLabel placeholder = new JLabel(!item.isTradeable() ? "Item not tradeable" : "—");
+			placeholder.setForeground(new Color(150, 150, 150));
+			placeholder.setFont(FontManager.getRunescapeSmallFont());
+			row.add(placeholder);
+			return row;
+		}
+
+		final long totalValue = item.getAvgValue();
+		final long singleValue = item.getAvgPrice();
+
+		JLabel totalLabel = new JLabel(GpFormat.shortValue(totalValue));
+		totalLabel.setFont(FontManager.getRunescapeSmallFont());
+		totalLabel.setForeground(COLOR_AVG);
+		totalLabel.setToolTipText(NUMBER_FORMAT.format(totalValue) + " gp");
+		row.add(totalLabel);
+
+		JLabel singleLabel = new JLabel("(" + GpFormat.shortValue(singleValue) + ")");
+		singleLabel.setFont(FontManager.getRunescapeSmallFont());
+		singleLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		singleLabel.setToolTipText(NUMBER_FORMAT.format(singleValue) + " gp");
+		row.add(singleLabel);
+
+		return row;
 	}
 
 	/** Toggles reorder mode, showing or hiding the per-row drag/arrow strips without a full rebuild. */
@@ -1511,19 +2444,25 @@ public class StockpilePanel extends PluginPanel
 	{
 		reorderMode = !reorderMode;
 		updateReorderToggle();
-
-		for (JComponent strip : reorderStrips)
-			strip.setVisible(reorderMode);
-
-		trackedItemsPanel.revalidate();
-		trackedItemsPanel.repaint();
+		renderTrackedRows(lastRenderItems, lastRenderIndicatorMode);
+		bottomPanel.setVisible(config.showGeEstimates() && !reorderMode);
 	}
 
-	/** Highlights the header reorder toggle when reorder mode is active. */
+	/** Highlights the header reorder toggle and reveals the manage-categories button when manage mode is active. */
 	private void updateReorderToggle()
 	{
 		if (reorderToggle != null)
 			reorderToggle.setForeground(reorderMode ? COLOR_AVG : ColorScheme.LIGHT_GRAY_COLOR);
+
+		if (categoriesButton != null)
+			categoriesButton.setVisible(reorderMode);
+	}
+
+	/** Highlights the header compact toggle when compact view is active. */
+	private void updateCompactToggle()
+	{
+		if (compactToggle != null)
+			compactToggle.setForeground(config.compactView() ? COLOR_AVG : ColorScheme.LIGHT_GRAY_COLOR);
 	}
 
 	/** Builds a compact, hover-revealed glyph button styled like the row's remove button. */
@@ -1554,6 +2493,7 @@ public class StockpilePanel extends PluginPanel
 			public void mousePressed(MouseEvent e)
 			{
 				dragItemId = itemId;
+				dragGroupIds = computeDragGroup(itemId);
 				updateDrag(e);
 			}
 
@@ -1588,14 +2528,14 @@ public class StockpilePanel extends PluginPanel
 	private void updateDropTarget(int yInPanel)
 	{
 		int idx = 0;
-		int lastBottom = 0;
+		int lastBottom = -1;
 		for (Component c : trackedItemsPanel.getComponents())
 		{
 			if (!(c instanceof JComponent))
 				continue;
 
 			Object id = ((JComponent) c).getClientProperty(ROW_ITEM_ID);
-			if (id == null)
+			if (!(id instanceof Integer) || !dragGroupIds.contains(id))
 				continue;
 
 			Rectangle b = c.getBounds();
@@ -1614,7 +2554,11 @@ public class StockpilePanel extends PluginPanel
 		dragLineY = lastBottom;
 	}
 
-	/** Commits the in-progress drag to the reorder callback, converting the drop gap into a target index. */
+	/**
+	 * Commits the in-progress drag: places the dragged item at its new slot within its own
+	 * group and rewrites the full tracked order accordingly (kept within-group, since groups
+	 * render in global order). A no-op drop is ignored.
+	 */
 	private void commitDrag()
 	{
 		stopDragAutoscroll();
@@ -1623,22 +2567,82 @@ public class StockpilePanel extends PluginPanel
 			return;
 
 		int draggedId = dragItemId;
-		int from = orderedItemIds.indexOf(draggedId);
 		int gap = dragInsertIndex;
+		List<Integer> group = dragGroupIds;
 
 		dragItemId = -1;
 		dragInsertIndex = -1;
 		dragLineY = -1;
+		dragGroupIds = new ArrayList<>();
 		trackedItemsPanel.repaint();
 
-		if (from < 0 || gap < 0 || onReorder == null)
+		int fromGroupPos = group.indexOf(draggedId);
+		if (gap < 0 || onSetGlobalOrder == null || fromGroupPos < 0)
 			return;
 
-		int target = gap <= from ? gap : gap - 1;
-		if (target == from)
+		List<Integer> remaining = new ArrayList<>(group);
+		remaining.remove(Integer.valueOf(draggedId));
+
+		int k = gap > fromGroupPos ? gap - 1 : gap;
+		k = Math.max(0, Math.min(k, remaining.size()));
+
+		List<Integer> newOrder = new ArrayList<>(orderedItemIds);
+		newOrder.remove(Integer.valueOf(draggedId));
+
+		int insertAt;
+		if (k < remaining.size())
+			insertAt = newOrder.indexOf(remaining.get(k));
+		else if (!remaining.isEmpty())
+			insertAt = newOrder.indexOf(remaining.get(remaining.size() - 1)) + 1;
+		else
+			insertAt = newOrder.size();
+
+		if (insertAt < 0)
+			insertAt = newOrder.size();
+
+		newOrder.add(insertAt, draggedId);
+
+		if (newOrder.equals(orderedItemIds))
 			return;
 
-		onReorder.accept(draggedId, target);
+		onSetGlobalOrder.accept(newOrder);
+	}
+
+	/**
+	 * Determines the dragged item's group as the contiguous run of item rows between accordion
+	 * headers in the rendered list (the whole list when ungrouped), returning its item ids in
+	 * visual order.
+	 */
+	private List<Integer> computeDragGroup(int itemId)
+	{
+		List<Integer> current = new ArrayList<>();
+		List<Integer> found = null;
+
+		for (Component c : trackedItemsPanel.getComponents())
+		{
+			if (!(c instanceof JComponent))
+				continue;
+
+			JComponent jc = (JComponent) c;
+			if (Boolean.TRUE.equals(jc.getClientProperty(GROUP_HEADER_KEY)))
+			{
+				if (found != null)
+					break;
+
+				current = new ArrayList<>();
+				continue;
+			}
+
+			Object id = jc.getClientProperty(ROW_ITEM_ID);
+			if (id instanceof Integer)
+			{
+				current.add((Integer) id);
+				if ((Integer) id == itemId)
+					found = current;
+			}
+		}
+
+		return found != null ? found : current;
 	}
 
 	/** Starts/stops edge autoscroll based on whether the drag pointer is near the viewport's top or bottom. */

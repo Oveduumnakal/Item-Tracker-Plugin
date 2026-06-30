@@ -49,6 +49,7 @@ public interface StockpileConfig extends Config
 	String GROUP = "stockpile";
 
 	String KEY_TRACKED_ITEMS = "trackedItemIds";
+	String KEY_CATEGORIES = "trackedCategories";
 
 	String KEY_PRICE_REFRESH_SECONDS = "priceRefreshSeconds";
 	String KEY_PRICE_CHANGE_INDICATOR = "priceChangeIndicator";
@@ -63,6 +64,7 @@ public interface StockpileConfig extends Config
 	String KEY_ROW_3_DATA = "row3Data";
 	String KEY_SHOW_ITEM_PROFIT_ROW = "showItemProfitRow";
 	String KEY_STALE_PRICE_THRESHOLD = "stalePriceThresholdMinutes";
+	String KEY_COMPACT_VIEW = "compactView";
 
 	String KEY_SHOW_ITEM_VALUES = "showItemValues";
 	String KEY_SHOW_COLLECTION_VALUES = "showCollectionValues";
@@ -277,6 +279,18 @@ public interface StockpileConfig extends Config
 	default int stalePriceThresholdMinutes()
 	{
 		return 60;
+	}
+
+	@ConfigItem(
+			keyName = KEY_COMPACT_VIEW,
+			name = "Compact View",
+			description = "Show tracked items as compact two-row entries. Toggleable from the tracked list header.",
+			section = trackedItemSection,
+			position = 10
+	)
+	default boolean compactView()
+	{
+		return false;
 	}
 
 	@ConfigItem(

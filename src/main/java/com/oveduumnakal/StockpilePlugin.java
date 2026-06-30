@@ -177,6 +177,11 @@ public class StockpilePlugin extends Plugin
 
 	private final Map<Integer, TrackedItem> trackedItems = new LinkedHashMap<>();
 
+	/** Ordered user-defined categories (names + collapsed state); the source of truth for category order. */
+	private final List<CategoryState> categories = new ArrayList<>();
+	private boolean favoritesCollapsed;
+	private boolean uncategorizedCollapsed;
+
 	/** Transient, non-persisted item backing the read-only detail preview (view-only button); not in {@link #trackedItems}. */
 	private TrackedItem previewItem;
 
@@ -227,7 +232,43 @@ public class StockpilePlugin extends Plugin
 				this::onNotificationsEdited,
 				this::clearAllTrackedItems,
 				this::examineFor,
-				this::reorderTrackedItem
+				this::reorderTrackedItem,
+				this::setGlobalOrder,
+				this::toggleCompactView,
+				this::setFavorite,
+				this::setGroupCollapsed,
+				new StockpilePanel.CategoryActions()
+				{
+					@Override
+					public void setItemCategory(int itemId, String category)
+					{
+						StockpilePlugin.this.setItemCategory(itemId, category);
+					}
+
+					@Override
+					public void create(String name)
+					{
+						createCategory(name);
+					}
+
+					@Override
+					public void rename(String oldName, String newName)
+					{
+						renameCategory(oldName, newName);
+					}
+
+					@Override
+					public void delete(String name)
+					{
+						deleteCategory(name);
+					}
+
+					@Override
+					public void reorder(String name, int targetIndex)
+					{
+						reorderCategory(name, targetIndex);
+					}
+				}
 		);
 
 		final BufferedImage icon = ImageUtil.loadImageResource(getClass(), "icon.png");
@@ -244,6 +285,7 @@ public class StockpilePlugin extends Plugin
 		overlayManager.add(groundOverlay);
 		clientThread.invokeLater(() ->
 		{
+			loadCategories();
 			loadPersistedItems();
 
 			refreshPanel();
@@ -386,6 +428,18 @@ public class StockpilePlugin extends Plugin
 		List<AcquisitionRecord> acquisitions;
 		List<NotificationRule> notifications;
 		boolean notificationsInitialized;
+		boolean favorite;
+		String category;
+	}
+
+	private static final Type CATEGORIES_TYPE = new TypeToken<CategoryData>(){}.getType();
+
+	/** Serializable snapshot of the category definitions and special-group collapsed state. */
+	private static class CategoryData
+	{
+		List<CategoryState> categories;
+		boolean favoritesCollapsed;
+		boolean uncategorizedCollapsed;
 	}
 
 	/** Restores tracked items from the per-profile JSON written by {@link #persistTrackedItems()}. */
@@ -405,7 +459,10 @@ public class StockpilePlugin extends Plugin
 				if (list != null)
 				{
 					for (PersistedItem p : list)
+					{
 						addTrackedItem(p.itemId, p.quantity, p.acquisitions, p.notifications, p.notificationsInitialized, p.costBasisInitialized, false, TrackItemMode.TRACK);
+						applyPersistedGrouping(p.itemId, p.favorite, p.category);
+					}
 				}
 
 				return;
@@ -419,7 +476,69 @@ public class StockpilePlugin extends Plugin
 
 	}
 
-	/** Serializes the current tracked items (quantity, cost basis, notifications) to per-profile config. */
+	/**
+	 * Applies a persisted item's favorite/category grouping after it has been added.
+	 * Enqueued on the client thread so it runs after the matching {@link #addTrackedItem}
+	 * body (which is itself client-thread-deferred), guaranteeing the item exists.
+	 */
+	private void applyPersistedGrouping(int itemId, boolean favorite, String category)
+	{
+		clientThread.invokeLater(() ->
+		{
+			TrackedItem tracked = trackedItems.get(itemId);
+			if (tracked == null)
+				return;
+
+			tracked.setFavorite(favorite);
+			tracked.setCategory(category);
+		});
+	}
+
+	/** Restores the category definitions and group collapsed state from per-profile JSON. */
+	private void loadCategories()
+	{
+		categories.clear();
+		favoritesCollapsed = false;
+		uncategorizedCollapsed = false;
+
+		String saved = configManager.getRSProfileConfiguration(
+				StockpileConfig.GROUP, StockpileConfig.KEY_CATEGORIES);
+		if (saved == null || saved.trim().isEmpty())
+			return;
+
+		try
+		{
+			CategoryData data = gson.fromJson(saved.trim(), CATEGORIES_TYPE);
+			if (data == null)
+				return;
+
+			if (data.categories != null)
+				data.categories.stream()
+						.filter(c -> c != null && c.getName() != null && !c.getName().trim().isEmpty())
+						.forEach(categories::add);
+
+			favoritesCollapsed = data.favoritesCollapsed;
+			uncategorizedCollapsed = data.uncategorizedCollapsed;
+		}
+		catch (JsonSyntaxException e)
+		{
+			log.warn("Failed to parse persisted category JSON; ignoring", e);
+		}
+	}
+
+	/** Serializes the category definitions and group collapsed state to per-profile config. */
+	private void persistCategories()
+	{
+		CategoryData data = new CategoryData();
+		data.categories = new ArrayList<>(categories);
+		data.favoritesCollapsed = favoritesCollapsed;
+		data.uncategorizedCollapsed = uncategorizedCollapsed;
+
+		configManager.setRSProfileConfiguration(
+				StockpileConfig.GROUP, StockpileConfig.KEY_CATEGORIES, gson.toJson(data, CATEGORIES_TYPE));
+	}
+
+	/** Serializes the current tracked items (quantity, cost basis, notifications, grouping) to per-profile config. */
 	void persistTrackedItems()
 	{
 		List<PersistedItem> list = new ArrayList<>();
@@ -432,6 +551,8 @@ public class StockpilePlugin extends Plugin
 			p.acquisitions = item.getAcquisitions();
 			p.notifications = item.getNotifications();
 			p.notificationsInitialized = item.isNotificationsInitialized();
+			p.favorite = item.isFavorite();
+			p.category = item.getCategory();
 			list.add(p);
 		}
 
@@ -583,6 +704,178 @@ public class StockpilePlugin extends Plugin
 			trackedItems.clear();
 			ordered.forEach(item -> trackedItems.put(item.getItemId(), item));
 
+			persistTrackedItems();
+			refreshPanel();
+		});
+	}
+
+	/** Flips the persisted compact-view flag; the resulting {@link ConfigChanged} rebuilds the panel. */
+	private void toggleCompactView()
+	{
+		configManager.setConfiguration(StockpileConfig.GROUP, StockpileConfig.KEY_COMPACT_VIEW,
+				!config.compactView());
+	}
+
+	/** Sets an item's favorite flag (pinning it to the top "Favorites" group), then persists and refreshes. */
+	private void setFavorite(int itemId, boolean favorite)
+	{
+		clientThread.invokeLater(() ->
+		{
+			TrackedItem tracked = trackedItems.get(itemId);
+			if (tracked == null)
+				return;
+
+			tracked.setFavorite(favorite);
+			persistTrackedItems();
+			refreshPanel();
+		});
+	}
+
+	/** Sets a list group's collapsed state (a category name, or a special-group key), then persists and refreshes. */
+	private void setGroupCollapsed(String groupKey, boolean collapsed)
+	{
+		clientThread.invokeLater(() ->
+		{
+			if (CategoryState.FAVORITES_KEY.equals(groupKey))
+				favoritesCollapsed = collapsed;
+			else if (CategoryState.UNCATEGORIZED_KEY.equals(groupKey))
+				uncategorizedCollapsed = collapsed;
+			else
+				categories.stream()
+						.filter(c -> c.getName().equals(groupKey))
+						.findFirst()
+						.ifPresent(c -> c.setCollapsed(collapsed));
+
+			persistCategories();
+			refreshPanel();
+		});
+	}
+
+	/** Assigns an item to a category (null/blank clears it to Uncategorized), then persists and refreshes. */
+	private void setItemCategory(int itemId, String category)
+	{
+		clientThread.invokeLater(() ->
+		{
+			TrackedItem tracked = trackedItems.get(itemId);
+			if (tracked == null)
+				return;
+
+			tracked.setCategory(category == null || category.trim().isEmpty() ? null : category.trim());
+			persistTrackedItems();
+			refreshPanel();
+		});
+	}
+
+	/** Creates a new category (ignoring blanks and case-insensitive duplicates), then persists and refreshes. */
+	private void createCategory(String name)
+	{
+		clientThread.invokeLater(() ->
+		{
+			String trimmed = name == null ? "" : name.trim();
+			if (trimmed.isEmpty() || categories.stream().anyMatch(c -> c.getName().equalsIgnoreCase(trimmed)))
+				return;
+
+			categories.add(new CategoryState(trimmed, false));
+			persistCategories();
+			refreshPanel();
+		});
+	}
+
+	/** Renames a category and re-points its items, ignoring blanks and clashes, then persists and refreshes. */
+	private void renameCategory(String oldName, String newName)
+	{
+		clientThread.invokeLater(() ->
+		{
+			String trimmed = newName == null ? "" : newName.trim();
+			if (trimmed.isEmpty())
+				return;
+
+			CategoryState target = null;
+			for (CategoryState c : categories)
+			{
+				if (c.getName().equals(oldName))
+					target = c;
+				else if (c.getName().equalsIgnoreCase(trimmed))
+					return;
+			}
+
+			if (target == null)
+				return;
+
+			target.setName(trimmed);
+			trackedItems.values().stream()
+					.filter(t -> oldName.equals(t.getCategory()))
+					.forEach(t -> t.setCategory(trimmed));
+
+			persistCategories();
+			persistTrackedItems();
+			refreshPanel();
+		});
+	}
+
+	/** Deletes a category, moving its items to Uncategorized, then persists and refreshes. */
+	private void deleteCategory(String name)
+	{
+		clientThread.invokeLater(() ->
+		{
+			if (!categories.removeIf(c -> c.getName().equals(name)))
+				return;
+
+			trackedItems.values().stream()
+					.filter(t -> name.equals(t.getCategory()))
+					.forEach(t -> t.setCategory(null));
+
+			persistCategories();
+			persistTrackedItems();
+			refreshPanel();
+		});
+	}
+
+	/** Moves a category to a new position in the ordered list, then persists and refreshes. */
+	private void reorderCategory(String name, int targetIndex)
+	{
+		clientThread.invokeLater(() ->
+		{
+			int from = -1;
+			for (int i = 0; i < categories.size(); i++)
+				if (categories.get(i).getName().equals(name))
+				{
+					from = i;
+					break;
+				}
+
+			if (from < 0)
+				return;
+
+			int to = Math.max(0, Math.min(targetIndex, categories.size() - 1));
+			if (to == from)
+				return;
+
+			categories.add(to, categories.remove(from));
+			persistCategories();
+			refreshPanel();
+		});
+	}
+
+	/** Reorders the tracked items to match the given id order (drag reorder), then persists and refreshes. */
+	private void setGlobalOrder(java.util.List<Integer> orderedIds)
+	{
+		clientThread.invokeLater(() ->
+		{
+			Map<Integer, TrackedItem> reordered = new LinkedHashMap<>();
+			for (Integer id : orderedIds)
+			{
+				TrackedItem tracked = trackedItems.get(id);
+				if (tracked != null)
+					reordered.put(id, tracked);
+			}
+
+			// Defensive: only apply when the new order is a faithful permutation of the current set.
+			if (reordered.size() != trackedItems.size())
+				return;
+
+			trackedItems.clear();
+			trackedItems.putAll(reordered);
 			persistTrackedItems();
 			refreshPanel();
 		});
@@ -1092,6 +1385,7 @@ public class StockpilePlugin extends Plugin
 				runePouchSeenSinceLogin = false;
 				pendingQuantitySync = false;
 				pendingItemDeltas.clear();
+				loadCategories();
 				loadPersistedItems();
 				refreshPanel();
 				break;
@@ -1527,7 +1821,11 @@ public class StockpilePlugin extends Plugin
 
 		final GameState gs = client.getGameState();
 		final boolean loggedIn = gs == GameState.LOGGED_IN || gs == GameState.LOADING;
-		SwingUtilities.invokeLater(() -> panel.rebuild(items, refresh, indicatorMode, loggedIn));
+		final List<CategoryState> categorySnapshot = new ArrayList<>(categories);
+		final boolean favCollapsed = favoritesCollapsed;
+		final boolean uncatCollapsed = uncategorizedCollapsed;
+		SwingUtilities.invokeLater(() -> panel.rebuild(items, refresh, indicatorMode, loggedIn,
+				categorySnapshot, favCollapsed, uncatCollapsed));
 	}
 
 	/**
