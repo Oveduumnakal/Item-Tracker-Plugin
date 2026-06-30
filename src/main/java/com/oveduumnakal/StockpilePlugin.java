@@ -816,6 +816,8 @@ public class StockpilePlugin extends Plugin
 		item.setHighPrice(prices.getHigh());
 		item.setLowPrice(prices.getLow());
 		item.setAvgPrice(prices.avg());
+		item.setLatestHighTime(prices.getHighTime());
+		item.setLatestLowTime(prices.getLowTime());
 		item.setPriceLoadFailed(false);
 		item.getWindowStats().put(TimeWindow.LIVE,
 				new PriceStats(prices.getHigh(), prices.getLow(), prices.avg(), 0));
