@@ -1155,7 +1155,8 @@ public class StockpilePlugin extends Plugin
 			StockpileConfig.KEY_SHOW_VOLUME_GRAPH,
 			StockpileConfig.KEY_SHOW_ALCH_INFO,
 			StockpileConfig.KEY_SHOW_NOTIFICATIONS,
-			StockpileConfig.KEY_SHOW_ITEM_LOG);
+			StockpileConfig.KEY_SHOW_ITEM_LOG,
+			StockpileConfig.KEY_SHOW_LINKS);
 
 	/**
 	 * Keeps detail-section slots unique: when a section is moved to a slot already

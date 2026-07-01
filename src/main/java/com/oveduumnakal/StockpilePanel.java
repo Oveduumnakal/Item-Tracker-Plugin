@@ -32,7 +32,10 @@ import net.runelite.client.ui.PluginPanel;
 import net.runelite.client.ui.components.IconTextField;
 import net.runelite.client.ui.components.PluginErrorPanel;
 import net.runelite.client.util.AsyncBufferedImage;
+import net.runelite.client.util.LinkBrowser;
 import net.runelite.http.api.item.ItemPrice;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
@@ -281,6 +284,7 @@ public class StockpilePanel extends PluginPanel
 	private JPanel priceGraphSection;
 	private JPanel volumeGraphSection;
 	private JPanel alchInfoSection;
+	private JPanel linksSection;
 	private String appliedSectionLayout;
 	private Set<TimeWindow> appliedOverviewRows;
 
@@ -3087,6 +3091,8 @@ public class StockpilePanel extends PluginPanel
 
 		alchInfoSection = buildDetailSection("Alchemy Info", buildAlchBlock());
 
+		linksSection = buildDetailSection("Links", buildLinksBlock());
+
 		detailCard.add(topStack, BorderLayout.NORTH);
 
 		acquisitionsModel = new AcquisitionsTableModel();
@@ -3601,12 +3607,13 @@ public class StockpilePanel extends PluginPanel
 		JPanel[] sections = {
 				itemValuesSection, ccvSection, marketInfoSection, priceOverviewSection,
 				priceGraphSection, volumeGraphSection, alchInfoSection, notificationsSection,
-				acquisitionsSection
+				acquisitionsSection, linksSection
 		};
 		SectionSlot[] slots = {
 				config.showItemValues(), config.showCollectionValues(), config.showMarketInfo(),
 				config.showPriceOverview(), config.showPriceGraph(), config.showVolumeGraph(),
-				config.showAlchInfo(), config.showNotifications(), config.showItemLog()
+				config.showAlchInfo(), config.showNotifications(), config.showItemLog(),
+				config.showLinks()
 		};
 
 		StringBuilder sig = new StringBuilder();
@@ -4433,6 +4440,67 @@ public class StockpilePanel extends PluginPanel
 	}
 
 	/** Builds the alch-info section (high/low alch values and the high-alch profit estimate). */
+	private static final String WIKI_BASE = "https://oldschool.runescape.wiki/w/";
+	private static final String PRICES_BASE = "https://prices.runescape.wiki/osrs/item/";
+
+	/** Builds the Links detail section's content: Wiki and Live Prices buttons for the current item. */
+	private JPanel buildLinksBlock()
+	{
+		JPanel block = new JPanel(new GridLayout(1, 2, 6, 0));
+		block.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		block.setBorder(new EmptyBorder(4, 8, 6, 8));
+		block.add(buildLinkButton("Wiki", "Open the OSRS Wiki page for this item", this::openWikiLink));
+		block.add(buildLinkButton("Live Prices", "Open the live prices page for this item", this::openPricesLink));
+
+		return block;
+	}
+
+	/** Builds a detail-view link button that runs the given action when clicked. */
+	private JButton buildLinkButton(String text, String tooltip, Runnable onClick)
+	{
+		JButton button = new JButton(text);
+		button.setFont(FontManager.getRunescapeSmallFont());
+		button.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		button.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		button.setFocusPainted(false);
+		button.setToolTipText(tooltip);
+		button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+		button.addActionListener(e -> onClick.run());
+
+		return button;
+	}
+
+	/** Opens the OSRS Wiki page for the item currently shown in the detail view. */
+	private void openWikiLink()
+	{
+		TrackedItem item = currentDetailItem();
+		if (item == null)
+			return;
+
+		String name = URLEncoder.encode(item.getName(), StandardCharsets.UTF_8).replace("+", "_");
+		LinkBrowser.browse(WIKI_BASE + name);
+	}
+
+	/** Opens the wiki realtime prices page for the item currently shown in the detail view. */
+	private void openPricesLink()
+	{
+		TrackedItem item = currentDetailItem();
+		if (item == null)
+			return;
+
+		LinkBrowser.browse(PRICES_BASE + item.getItemId());
+	}
+
+	/** @return the item currently shown in the detail view (a tracked item or the transient preview), or null. */
+	private TrackedItem currentDetailItem()
+	{
+		TrackedItem item = currentItems.get(detailItemId);
+		if (item == null && previewItem != null && previewItem.getItemId() == detailItemId)
+			item = previewItem;
+
+		return item;
+	}
+
 	private JPanel buildAlchBlock()
 	{
 		JPanel block = new JPanel()
