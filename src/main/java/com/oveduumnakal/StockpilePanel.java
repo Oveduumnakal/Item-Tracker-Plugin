@@ -244,8 +244,8 @@ public class StockpilePanel extends PluginPanel
 
 	private BuySellBar buySellBar;
 	private final JLabel pressureMarketLabel = new JLabel();
-	private final JLabel buyPressureLabel = new JLabel();
-	private final JLabel sellPressureLabel = new JLabel();
+	private final PressureVolumeLabel buyPressureLabel = new PressureVolumeLabel();
+	private final PressureVolumeLabel sellPressureLabel = new PressureVolumeLabel();
 
 	private final JLabel haValue = new JLabel();
 	private final JLabel haProfit = new JLabel();
@@ -5082,7 +5082,9 @@ public class StockpilePanel extends PluginPanel
 			pressureMarketLabel.setText("No data");
 			pressureMarketLabel.setForeground(new Color(150, 150, 150));
 			buyPressureLabel.setText("");
+			buyPressureLabel.setVolume(-1);
 			sellPressureLabel.setText("");
+			sellPressureLabel.setVolume(-1);
 			return;
 		}
 
@@ -5098,17 +5100,19 @@ public class StockpilePanel extends PluginPanel
 		}
 		else if (buyPct > PRESSURE_BALANCED_HIGH)
 		{
-			pressureMarketLabel.setText("Buyers Market");
-			pressureMarketLabel.setForeground(COLOR_HIGH);
-		}
-		else
-		{
 			pressureMarketLabel.setText("Sellers Market");
 			pressureMarketLabel.setForeground(COLOR_LOW);
 		}
+		else
+		{
+			pressureMarketLabel.setText("Buyers Market");
+			pressureMarketLabel.setForeground(COLOR_HIGH);
+		}
 
 		buyPressureLabel.setText(buyPct + "% Buy (" + GpFormat.shortValue(buy) + ")");
+		buyPressureLabel.setVolume(buy);
 		sellPressureLabel.setText(sellPct + "% Sell (" + GpFormat.shortValue(sell) + ")");
+		sellPressureLabel.setVolume(sell);
 	}
 
 	/** @return the {@code [min, max]} price range over the item's last 30 days via {@link MarketClassifier}. */
@@ -5527,13 +5531,65 @@ public class StockpilePanel extends PluginPanel
 		}
 	}
 
+	/**
+	 * Buy/Sell pressure label of the form {@code "55% Buy (550)"} whose short-format volume
+	 * parenthetical reveals the full number in a tooltip when hovered.
+	 */
+	private static final class PressureVolumeLabel extends JLabel
+	{
+		private long volume = -1;
+
+		PressureVolumeLabel()
+		{
+			ToolTipManager.sharedInstance().registerComponent(this);
+		}
+
+		void setVolume(long volume)
+		{
+			this.volume = volume;
+		}
+
+		@Override
+		public String getToolTipText(MouseEvent event)
+		{
+			if (volume < 0)
+				return null;
+
+			String text = getText();
+			int open = text.indexOf('(');
+			int close = text.indexOf(')');
+			if (open < 0 || close <= open)
+				return null;
+
+			FontMetrics fm = getFontMetrics(getFont());
+			Insets insets = getInsets();
+			int avail = getWidth() - insets.left - insets.right;
+			int textWidth = fm.stringWidth(text);
+
+			int startX;
+			if (getHorizontalAlignment() == SwingConstants.RIGHT)
+				startX = insets.left + avail - textWidth;
+			else if (getHorizontalAlignment() == SwingConstants.CENTER)
+				startX = insets.left + (avail - textWidth) / 2;
+			else
+				startX = insets.left;
+
+			int parenStart = startX + fm.stringWidth(text.substring(0, open));
+			int parenEnd = startX + fm.stringWidth(text.substring(0, close + 1));
+
+			return event.getX() >= parenStart && event.getX() <= parenEnd
+					? NUMBER_FORMAT.format(volume)
+					: null;
+		}
+	}
+
 	/** Custom-painted horizontal bar split green (buy fraction, left) and red (sell fraction, right). */
 	private static final class BuySellBar extends JPanel
 	{
 		private static final Color BAR_GREEN = new Color(100, 220, 100);
 		private static final Color BAR_RED = new Color(220, 100, 100);
-		private static final int BAR_H = 8;
-		private static final int BAR_ARC = 5;
+		private static final int BAR_H = 5;
+		private static final int BAR_ARC = 3;
 
 		/** Buy fraction 0..1, or negative for the "no data" state. */
 		private double buyFraction = -1;
