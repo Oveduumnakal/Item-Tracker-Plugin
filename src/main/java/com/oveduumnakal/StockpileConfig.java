@@ -65,6 +65,9 @@ public interface StockpileConfig extends Config
 	String KEY_SHOW_ITEM_PROFIT_ROW = "showItemProfitRow";
 	String KEY_STALE_PRICE_THRESHOLD = "stalePriceThresholdMinutes";
 	String KEY_COMPACT_VIEW = "compactView";
+	String KEY_SHOW_SCREEN_OVERLAY = "showScreenOverlay";
+	String KEY_SCREEN_OVERLAY_LAYOUT = "screenOverlayLayout";
+	String KEY_SCREEN_OVERLAY_ON_TOP = "screenOverlayOnTop";
 
 	String KEY_SHOW_ITEM_VALUES = "showItemValues";
 	String KEY_SHOW_COLLECTION_VALUES = "showCollectionValues";
@@ -76,6 +79,7 @@ public interface StockpileConfig extends Config
 	String KEY_SHOW_NOTIFICATIONS = "showNotifications";
 	String KEY_SHOW_ITEM_LOG = "showItemLog";
 	String KEY_SHOW_LINKS = "showLinks";
+	String KEY_PRESSURE_WINDOW = "buySellPressureWindow";
 	String KEY_PRICE_OVERVIEW_ROWS = "priceOverviewPreset";
 	String KEY_AUTO_ADD_ITEMS = "autoAddItems";
 	String KEY_NOTIFICATION_STYLE = "notificationStyle";
@@ -95,6 +99,8 @@ public interface StockpileConfig extends Config
 	String KEY_HIGHLIGHT_TRACKED_ITEMS = "highlightTrackedItems";
 	String KEY_HIGHLIGHT_COLOR = "highlightColor";
 	String KEY_GLOW_EFFECT = "glowEffect";
+	String KEY_GE_INTEGRATION = "geIntegration";
+	String KEY_GE_FOCUS_PANEL = "geFocusPanel";
 
 	/** Top-level panel behavior: price refresh, change indicator, and global toggles. */
 	@ConfigSection(
@@ -135,6 +141,22 @@ public interface StockpileConfig extends Config
 			position = 4
 	)
 	String detailViewSection = "detailView";
+
+	/** The in-game on-screen overlay of selected tracked items. */
+	@ConfigSection(
+			name = "On-screen Overlay",
+			description = "Show selected tracked items as a draggable in-game overlay",
+			position = 5
+	)
+	String overlaySection = "overlay";
+
+	/** How the open Grand Exchange offer ties into the Stockpile view. */
+	@ConfigSection(
+			name = "GE Integration",
+			description = "How the open Grand Exchange offer ties into the Stockpile view",
+			position = 6
+	)
+	String geIntegrationSection = "geIntegration";
 
 	@Range(min = 30)
 	@ConfigItem(
@@ -416,6 +438,18 @@ public interface StockpileConfig extends Config
 	}
 
 	@ConfigItem(
+			keyName = KEY_PRESSURE_WINDOW,
+			name = "Buy/Sell Pressure Window",
+			description = "Look-back period for the Buy/Sell Pressure bar in the Market Info section",
+			section = detailViewSection,
+			position = 11
+	)
+	default PressureWindow buySellPressureWindow()
+	{
+		return PressureWindow.DAY;
+	}
+
+	@ConfigItem(
 			keyName = KEY_PRICE_OVERVIEW_ROWS,
 			name = "Price Overview Rows",
 			description = "How many time-window rows the Price Overview shows. "
@@ -622,5 +656,68 @@ public interface StockpileConfig extends Config
 	default GlowSpeed glowEffect()
 	{
 		return GlowSpeed.MEDIUM;
+	}
+
+	@ConfigItem(
+			keyName = KEY_SHOW_SCREEN_OVERLAY,
+			name = "Show on Screen",
+			description = "Show the items selected (via the manage view) as a draggable in-game overlay",
+			section = overlaySection,
+			position = 0
+	)
+	default boolean showScreenOverlay()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+			keyName = KEY_SCREEN_OVERLAY_LAYOUT,
+			name = "Overlay Layout",
+			description = "Compact two-row entries, or a replica of the standard tracked-item row",
+			section = overlaySection,
+			position = 1
+	)
+	default OverlayLayout screenOverlayLayout()
+	{
+		return OverlayLayout.STANDARD;
+	}
+
+	@ConfigItem(
+			keyName = KEY_SCREEN_OVERLAY_ON_TOP,
+			name = "Overlay Always On Top",
+			description = "Keep the overlay above open interfaces. When off, it renders behind windows "
+					+ "like the bank or Grand Exchange.",
+			section = overlaySection,
+			position = 2
+	)
+	default boolean screenOverlayOnTop()
+	{
+		return false;
+	}
+
+	@ConfigItem(
+			keyName = KEY_GE_INTEGRATION,
+			name = "Interaction",
+			description = "Open the current Grand Exchange offer item in Stockpile's view-only mode: "
+					+ "via an injected button, automatically, both, or off",
+			section = geIntegrationSection,
+			position = 0
+	)
+	default GeIntegrationMode geIntegration()
+	{
+		return GeIntegrationMode.BOTH;
+	}
+
+	@ConfigItem(
+			keyName = KEY_GE_FOCUS_PANEL,
+			name = "Force Focus",
+			description = "When a GE offer opens the item in Stockpile, switch to and focus the Stockpile "
+					+ "panel. When off, the item is loaded silently (shown next time you open Stockpile).",
+			section = geIntegrationSection,
+			position = 1
+	)
+	default boolean geFocusPanel()
+	{
+		return true;
 	}
 }
