@@ -124,6 +124,8 @@ public class StockpilePanel extends PluginPanel
 	private final Runnable onToggleCompactView;
 	/** Favorite toggle callback: (itemId, favorite) — pins/unpins an item to the top Favorites group. */
 	private final BiConsumer<Integer, Boolean> onSetFavorite;
+	/** Overlay toggle callback: (itemId, onOverlay) — adds/removes an item from the on-screen overlay. */
+	private final BiConsumer<Integer, Boolean> onSetOnOverlay;
 	/** Group collapse callback: (groupKey, collapsed) — persists a group's accordion state. */
 	private final BiConsumer<String, Boolean> onSetGroupCollapsed;
 	/** Category create/rename/delete/reorder and per-item assignment operations. */
@@ -448,6 +450,7 @@ public class StockpilePanel extends PluginPanel
 			Consumer<List<Integer>> onSetGlobalOrder,
 			Runnable onToggleCompactView,
 			BiConsumer<Integer, Boolean> onSetFavorite,
+			BiConsumer<Integer, Boolean> onSetOnOverlay,
 			BiConsumer<String, Boolean> onSetGroupCollapsed,
 			CategoryActions categoryActions)
 	{
@@ -465,6 +468,7 @@ public class StockpilePanel extends PluginPanel
 		this.onSetGlobalOrder = onSetGlobalOrder;
 		this.onToggleCompactView = onToggleCompactView;
 		this.onSetFavorite = onSetFavorite;
+		this.onSetOnOverlay = onSetOnOverlay;
 		this.onSetGroupCollapsed = onSetGroupCollapsed;
 		this.categoryActions = categoryActions;
 
@@ -1507,6 +1511,23 @@ public class StockpilePanel extends PluginPanel
 		return new ImageIcon(img);
 	}
 
+	/** Paints a small monochrome monitor (on-screen overlay) icon in the given colour. */
+	private static Icon overlayIcon(Color color)
+	{
+		int size = 16;
+		BufferedImage img = new BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB);
+		Graphics2D g = img.createGraphics();
+		g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+		g.setColor(color);
+
+		g.drawRect(2, 2, size - 5, size - 8);
+		g.fillRect(size / 2 - 2, size - 5, 4, 2);
+		g.fillRect(size / 2 - 4, size - 3, 8, 1);
+
+		g.dispose();
+		return new ImageIcon(img);
+	}
+
 	/** Renders one collapsible group: a clickable header plus its rows, unless empty (skipped) or collapsed (header only). */
 	private void renderGroup(String title, String groupKey, boolean collapsed,
 			List<TrackedItem> groupItems, PriceIndicatorMode indicatorMode)
@@ -2028,7 +2049,71 @@ public class StockpilePanel extends PluginPanel
 		east.add(Box.createVerticalStrut(4));
 		east.add(star);
 
+		if (config.showScreenOverlay())
+		{
+			east.add(Box.createVerticalStrut(4));
+			east.add(buildOverlayToggle(item));
+		}
+
 		return east;
+	}
+
+	/**
+	 * Builds the overlay-select control beneath the favorite star: a painted monitor icon that
+	 * toggles whether the item appears in the on-screen overlay. Gold when selected, and disabled
+	 * (greyed) once {@link StockpilePlugin#OVERLAY_MAX} items are selected and this isn't one.
+	 */
+	private JLabel buildOverlayToggle(TrackedItem item)
+	{
+		boolean on = item.isOnOverlay();
+		boolean atCap = !on && overlayCount() >= StockpilePlugin.OVERLAY_MAX;
+
+		final Color restColor = on ? COLOR_AVG : (atCap ? new Color(80, 80, 80) : STAR_DIM);
+		final Color hoverColor = on ? STAR_DIM : COLOR_AVG;
+
+		JLabel toggle = new JLabel(overlayIcon(restColor));
+		toggle.setAlignmentX(Component.CENTER_ALIGNMENT);
+		toggle.setToolTipText(on ? "Remove from on-screen overlay"
+				: atCap ? "Overlay is full (" + StockpilePlugin.OVERLAY_MAX + " max)" : "Show on the on-screen overlay");
+
+		if (!atCap)
+		{
+			toggle.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+			toggle.addMouseListener(new MouseAdapter()
+			{
+				@Override
+				public void mouseClicked(MouseEvent e)
+				{
+					if (onSetOnOverlay != null)
+						onSetOnOverlay.accept(item.getItemId(), !item.isOnOverlay());
+				}
+
+				@Override
+				public void mouseEntered(MouseEvent e)
+				{
+					toggle.setIcon(overlayIcon(hoverColor));
+				}
+
+				@Override
+				public void mouseExited(MouseEvent e)
+				{
+					toggle.setIcon(overlayIcon(restColor));
+				}
+			});
+		}
+
+		return toggle;
+	}
+
+	/** @return how many currently tracked items are flagged for the on-screen overlay. */
+	private int overlayCount()
+	{
+		int count = 0;
+		for (TrackedItem item : currentItems.values())
+			if (item.isOnOverlay())
+				count++;
+
+		return count;
 	}
 
 	/**
@@ -2097,11 +2182,20 @@ public class StockpilePanel extends PluginPanel
 		removeBtn.setAlignmentX(Component.CENTER_ALIGNMENT);
 		favStar.setAlignmentX(Component.CENTER_ALIGNMENT);
 
+		final JLabel overlayBtn = config.showScreenOverlay() ? buildOverlayToggle(item) : null;
+
 		JPanel eastPanel = new JPanel();
 		eastPanel.setLayout(new BoxLayout(eastPanel, BoxLayout.Y_AXIS));
 		eastPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 		eastPanel.add(removeBtn);
 		eastPanel.add(favStar);
+		if (overlayBtn != null)
+		{
+			overlayBtn.setAlignmentX(Component.CENTER_ALIGNMENT);
+			overlayBtn.setVisible(false);
+			eastPanel.add(overlayBtn);
+		}
+
 		card.add(eastPanel, BorderLayout.EAST);
 
 		JPanel centerPanel = new JPanel();
@@ -2133,7 +2227,7 @@ public class StockpilePanel extends PluginPanel
 		{
 			centerPanel.add(buildCompactValueRow(item));
 			card.add(centerPanel, BorderLayout.CENTER);
-			installRowHover(card, item, removeBtn, favStar, REMOVE_COLOR, REMOVE_HIDDEN);
+			installRowHover(card, item, removeBtn, favStar, overlayBtn, REMOVE_COLOR, REMOVE_HIDDEN);
 			return card;
 		}
 
@@ -2346,19 +2440,19 @@ public class StockpilePanel extends PluginPanel
 		}
 
 		card.add(centerPanel, BorderLayout.CENTER);
-		installRowHover(card, item, removeBtn, favStar, REMOVE_COLOR, REMOVE_HIDDEN);
+		installRowHover(card, item, removeBtn, favStar, overlayBtn, REMOVE_COLOR, REMOVE_HIDDEN);
 
 		return card;
 	}
 
 	/**
 	 * Wires the shared row hover behaviour onto a tracked-item card: clicking the row
-	 * (other than the remove button or the favorite star) opens the detail view, and
-	 * entering/leaving the card tracks {@link #hoveredItemId} and reveals/hides the remove
-	 * button and favorite star.
+	 * (other than the remove button, favorite star, or overlay button) opens the detail view,
+	 * and entering/leaving the card tracks {@link #hoveredItemId} and reveals/hides the remove
+	 * button, favorite star, and the (optional) overlay-select button.
 	 */
 	private void installRowHover(JPanel card, TrackedItem item, JButton removeBtn, JLabel favStar,
-			Color removeColor, Color removeHidden)
+			JLabel overlayBtn, Color removeColor, Color removeHidden)
 	{
 		card.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 		MouseAdapter hoverListener = new MouseAdapter()
@@ -2366,7 +2460,7 @@ public class StockpilePanel extends PluginPanel
 			@Override
 			public void mouseClicked(MouseEvent e)
 			{
-				if (e.getSource() == removeBtn || e.getSource() == favStar)
+				if (e.getSource() == removeBtn || e.getSource() == favStar || e.getSource() == overlayBtn)
 					return;
 
 				showDetail(item.getItemId());
@@ -2379,6 +2473,8 @@ public class StockpilePanel extends PluginPanel
 				removeBtn.setForeground(removeColor);
 				favStar.putClientProperty(STAR_ROW_HOVERED, true);
 				refreshFavoriteStar(favStar, item.isFavorite());
+				if (overlayBtn != null)
+					overlayBtn.setVisible(true);
 			}
 
 			@Override
@@ -2394,6 +2490,8 @@ public class StockpilePanel extends PluginPanel
 					favStar.putClientProperty(STAR_ROW_HOVERED, false);
 					favStar.putClientProperty(STAR_HOVERED, false);
 					refreshFavoriteStar(favStar, item.isFavorite());
+					if (overlayBtn != null)
+						overlayBtn.setVisible(false);
 				}
 			}
 		};

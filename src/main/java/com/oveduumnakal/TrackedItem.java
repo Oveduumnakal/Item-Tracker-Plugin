@@ -34,6 +34,7 @@ public class TrackedItem
 
 	private boolean favorite;
 	private String category;
+	private boolean onOverlay;
 
 	private long highPrice;
 	private long lowPrice;
