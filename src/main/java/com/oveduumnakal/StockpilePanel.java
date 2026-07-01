@@ -193,8 +193,9 @@ public class StockpilePanel extends PluginPanel
 				}
 			}
 
-			// Let the logged-out placeholder fill the viewport so its message centers vertically.
-			if (loggedOutCard != null && loggedOutCard.isVisible())
+			// Let the logged-out placeholder and loading spinner fill the viewport so they center vertically.
+			if ((loggedOutCard != null && loggedOutCard.isVisible())
+					|| detailLoadingCard.isVisible())
 			{
 				JViewport viewport = (JViewport) SwingUtilities.getAncestorOfClass(JViewport.class, this);
 
@@ -207,6 +208,7 @@ public class StockpilePanel extends PluginPanel
 	};
 	private static final String CARD_MAIN = "main";
 	private static final String CARD_DETAIL = "detail";
+	private static final String CARD_DETAIL_LOADING = "detailLoading";
 	private static final String CARD_LOGGED_OUT = "loggedOut";
 
 	private final Map<Integer, TrackedItem> currentItems = new HashMap<>();
@@ -218,6 +220,16 @@ public class StockpilePanel extends PluginPanel
 
 	/** A transient, read-only item shown in the detail view via {@link #showPreview} but never added to the tracked list. */
 	private TrackedItem previewItem;
+
+	/** Placeholder card showing a spinner while a preview item's prices are still being fetched. */
+	private final JPanel detailLoadingCard = new JPanel(new GridBagLayout());
+	private final Spinner detailSpinner = new Spinner();
+
+	/** One-shot safety net that reveals the detail view if a preview's prices never arrive. */
+	private Timer detailLoadTimeout;
+
+	/** Set when {@link #detailLoadTimeout} fires so the spinner stops waiting on a load that failed silently. */
+	private boolean detailLoadTimedOut;
 
 	private final JPanel detailCard = new JPanel(new BorderLayout(0, 8));
 	private final JLabel detailIconLabel = new JLabel();
@@ -793,9 +805,12 @@ public class StockpilePanel extends PluginPanel
 
 		loggedOutCard.add(loggedOutMessage);
 
+		buildDetailLoadingCard();
+
 		cardsHost.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		cardsHost.add(mainCard, CARD_MAIN);
 		cardsHost.add(detailCard, CARD_DETAIL);
+		cardsHost.add(detailLoadingCard, CARD_DETAIL_LOADING);
 		cardsHost.add(loggedOutCard, CARD_LOGGED_OUT);
 		add(cardsHost, BorderLayout.CENTER);
 
@@ -828,6 +843,13 @@ public class StockpilePanel extends PluginPanel
 
 		pulseTimer = new Timer(25, e -> updatePulses());
 		pulseTimer.start();
+
+		detailLoadTimeout = new Timer(12000, e ->
+		{
+			detailLoadTimedOut = true;
+			applyDetailCard();
+		});
+		detailLoadTimeout.setRepeats(false);
 	}
 
 	/** Moves the GE estimates block above or below the other sections per the configured position. */
@@ -890,6 +912,7 @@ public class StockpilePanel extends PluginPanel
 		refreshAgeTimer.stop();
 		loadingGlowTimer.stop();
 		pulseTimer.stop();
+		stopDetailLoading();
 	}
 
 	private static final Dimension DELTA_LABEL_SIZE = new Dimension(12, 12);
@@ -1225,7 +1248,11 @@ public class StockpilePanel extends PluginPanel
 			if (detail != null)
 			{
 				final TrackedItem shown = detail;
-				SwingUtilities.invokeLater(() -> populateDetail(shown));
+				SwingUtilities.invokeLater(() ->
+				{
+					populateDetail(shown);
+					applyDetailCard();
+				});
 			}
 			else if (!currentItems.isEmpty())
 			{
@@ -4705,9 +4732,10 @@ public class StockpilePanel extends PluginPanel
 
 		previewItem = null;
 		detailItemId = itemId;
+		detailLoadTimedOut = false;
 		populateDetail(item);
 		footerPanel.setVisible(false);
-		cardLayout.show(cardsHost, CARD_DETAIL);
+		applyDetailCard();
 		if (onRequestDetailData != null)
 			onRequestDetailData.accept(itemId);
 	}
@@ -4721,9 +4749,10 @@ public class StockpilePanel extends PluginPanel
 	{
 		previewItem = item;
 		detailItemId = item.getItemId();
+		detailLoadTimedOut = false;
 		populateDetail(item);
 		footerPanel.setVisible(false);
-		cardLayout.show(cardsHost, CARD_DETAIL);
+		applyDetailCard();
 	}
 
 	/** Returns to the main item list, closing any open pop-outs. */
@@ -4731,9 +4760,85 @@ public class StockpilePanel extends PluginPanel
 	{
 		detailItemId = -1;
 		previewItem = null;
+		stopDetailLoading();
 		closePopouts();
 		footerPanel.setVisible(true);
 		cardLayout.show(cardsHost, CARD_MAIN);
+	}
+
+	/**
+	 * Shows either the spinner placeholder or the populated detail view for the
+	 * currently open item, depending on whether its prices are still loading.
+	 * A view-only preview shows the spinner until its prices arrive, its load
+	 * fails, or the safety timeout fires; everything else shows immediately.
+	 */
+	private void applyDetailCard()
+	{
+		TrackedItem shown = shownDetailItem();
+		if (isDetailLoading(shown))
+		{
+			detailSpinner.start();
+			if (!detailLoadTimeout.isRunning())
+				detailLoadTimeout.restart();
+
+			cardLayout.show(cardsHost, CARD_DETAIL_LOADING);
+		}
+		else
+		{
+			stopDetailLoading();
+			cardLayout.show(cardsHost, CARD_DETAIL);
+		}
+	}
+
+	/** Stops the spinner animation and cancels the pending load-timeout, if any. */
+	private void stopDetailLoading()
+	{
+		detailSpinner.stop();
+		detailLoadTimeout.stop();
+	}
+
+	/** @return the item currently backing the detail view (tracked or preview), or {@code null}. */
+	private TrackedItem shownDetailItem()
+	{
+		if (previewItem != null && previewItem.getItemId() == detailItemId)
+			return previewItem;
+
+		return currentItems.get(detailItemId);
+	}
+
+	/** @return whether {@code item} is a tradeable preview whose prices have not yet loaded (or failed). */
+	private boolean isDetailLoading(TrackedItem item)
+	{
+		return item != null
+				&& item.getMode() == TrackItemMode.VIEW
+				&& item.isTradeable()
+				&& !item.hasPrices()
+				&& !item.isPriceLoadFailed()
+				&& !detailLoadTimedOut;
+	}
+
+	/** Fills {@link #detailLoadingCard} with a centered spinner and caption. */
+	private void buildDetailLoadingCard()
+	{
+		detailLoadingCard.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		detailLoadingCard.setBorder(new EmptyBorder(10, 10, 10, 10));
+
+		JPanel inner = new JPanel();
+		inner.setLayout(new BoxLayout(inner, BoxLayout.Y_AXIS));
+		inner.setBackground(ColorScheme.DARK_GRAY_COLOR);
+
+		detailSpinner.setAlignmentX(Component.CENTER_ALIGNMENT);
+
+		JLabel caption = new JLabel("Loading item data…");
+		caption.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		caption.setFont(FontManager.getRunescapeSmallFont());
+		caption.setAlignmentX(Component.CENTER_ALIGNMENT);
+
+		inner.add(detailSpinner);
+		inner.add(Box.createVerticalStrut(10));
+		inner.add(caption);
+
+		detailLoadingCard.add(inner);
 	}
 
 	/** Prompts for confirmation, then clears all tracked items via the plugin callback. */
@@ -5626,6 +5731,56 @@ public class StockpilePanel extends PluginPanel
 				setBackground(table.getBackground());
 
 			return this;
+		}
+	}
+
+	/** A small indeterminate spinner: an orange arc that rotates while its Swing timer runs. */
+	private static final class Spinner extends JComponent
+	{
+		private static final int DIAMETER = 32;
+
+		private final Timer timer;
+		private int angle;
+
+		Spinner()
+		{
+			setPreferredSize(new Dimension(DIAMETER, DIAMETER));
+			setMaximumSize(new Dimension(DIAMETER, DIAMETER));
+			timer = new Timer(40, e ->
+			{
+				angle = (angle + 24) % 360;
+				repaint();
+			});
+		}
+
+		void start()
+		{
+			if (!timer.isRunning())
+				timer.start();
+		}
+
+		void stop()
+		{
+			timer.stop();
+		}
+
+		@Override
+		protected void paintComponent(Graphics g)
+		{
+			Graphics2D g2 = (Graphics2D) g.create();
+			g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+
+			int size = Math.min(getWidth(), getHeight()) - 6;
+			int x = (getWidth() - size) / 2;
+			int y = (getHeight() - size) / 2;
+
+			g2.setStroke(new BasicStroke(3f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+			g2.setColor(ColorScheme.MEDIUM_GRAY_COLOR);
+			g2.drawOval(x, y, size, size);
+			g2.setColor(ColorScheme.BRAND_ORANGE);
+			g2.drawArc(x, y, size, size, angle, 100);
+
+			g2.dispose();
 		}
 	}
 
