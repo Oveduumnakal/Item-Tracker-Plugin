@@ -65,6 +65,8 @@ public interface StockpileConfig extends Config
 	String KEY_SHOW_ITEM_PROFIT_ROW = "showItemProfitRow";
 	String KEY_STALE_PRICE_THRESHOLD = "stalePriceThresholdMinutes";
 	String KEY_COMPACT_VIEW = "compactView";
+	String KEY_SHOW_SCREEN_OVERLAY = "showScreenOverlay";
+	String KEY_SCREEN_OVERLAY_LAYOUT = "screenOverlayLayout";
 
 	String KEY_SHOW_ITEM_VALUES = "showItemValues";
 	String KEY_SHOW_COLLECTION_VALUES = "showCollectionValues";
@@ -134,6 +136,14 @@ public interface StockpileConfig extends Config
 			position = 4
 	)
 	String detailViewSection = "detailView";
+
+	/** The in-game on-screen overlay of selected tracked items. */
+	@ConfigSection(
+			name = "On-screen Overlay",
+			description = "Show selected tracked items as a draggable in-game overlay",
+			position = 5
+	)
+	String overlaySection = "overlay";
 
 	@Range(min = 30)
 	@ConfigItem(
@@ -609,5 +619,29 @@ public interface StockpileConfig extends Config
 	default GlowSpeed glowEffect()
 	{
 		return GlowSpeed.MEDIUM;
+	}
+
+	@ConfigItem(
+			keyName = KEY_SHOW_SCREEN_OVERLAY,
+			name = "Show on Screen",
+			description = "Show the items selected (via the manage view) as a draggable in-game overlay",
+			section = overlaySection,
+			position = 0
+	)
+	default boolean showScreenOverlay()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+			keyName = KEY_SCREEN_OVERLAY_LAYOUT,
+			name = "Overlay Layout",
+			description = "Compact two-row entries, or a replica of the standard tracked-item row",
+			section = overlaySection,
+			position = 1
+	)
+	default OverlayLayout screenOverlayLayout()
+	{
+		return OverlayLayout.STANDARD;
 	}
 }

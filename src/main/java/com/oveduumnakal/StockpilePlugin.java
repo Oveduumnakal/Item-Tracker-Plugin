@@ -141,6 +141,12 @@ public class StockpilePlugin extends Plugin
 	@Inject
 	private StockpileGroundOverlay groundOverlay;
 
+	/** Maximum number of items shown in the on-screen overlay (fixed for now). */
+	static final int OVERLAY_MAX = 5;
+
+	/** One independently-draggable overlay box per slot; they start grouped in the same snap corner. */
+	private final List<StockpileScreenOverlay> screenOverlays = new ArrayList<>();
+
 	private static final int[] RUNE_POUCH_TYPE_VARBITS = {
 			VarbitID.RUNE_POUCH_TYPE_1, VarbitID.RUNE_POUCH_TYPE_2, VarbitID.RUNE_POUCH_TYPE_3,
 			VarbitID.RUNE_POUCH_TYPE_4, VarbitID.RUNE_POUCH_TYPE_5, VarbitID.RUNE_POUCH_TYPE_6
@@ -236,6 +242,7 @@ public class StockpilePlugin extends Plugin
 				this::setGlobalOrder,
 				this::toggleCompactView,
 				this::setFavorite,
+				this::setOnOverlay,
 				this::setGroupCollapsed,
 				new StockpilePanel.CategoryActions()
 				{
@@ -283,6 +290,12 @@ public class StockpilePlugin extends Plugin
 		clientToolbar.addNavigation(navButton);
 		overlayManager.add(highlightOverlay);
 		overlayManager.add(groundOverlay);
+		for (int slot = 0; slot < OVERLAY_MAX; slot++)
+		{
+			StockpileScreenOverlay overlay = new StockpileScreenOverlay(this, config, itemManager, slot);
+			screenOverlays.add(overlay);
+			overlayManager.add(overlay);
+		}
 		clientThread.invokeLater(() ->
 		{
 			loadCategories();
@@ -385,6 +398,8 @@ public class StockpilePlugin extends Plugin
 		clientToolbar.removeNavigation(navButton);
 		overlayManager.remove(highlightOverlay);
 		overlayManager.remove(groundOverlay);
+		screenOverlays.forEach(overlayManager::remove);
+		screenOverlays.clear();
 		panel.shutdown();
 		groundItems.clear();
 		if (priceRefreshTask != null)
@@ -430,6 +445,7 @@ public class StockpilePlugin extends Plugin
 		boolean notificationsInitialized;
 		boolean favorite;
 		String category;
+		boolean onOverlay;
 	}
 
 	private static final Type CATEGORIES_TYPE = new TypeToken<CategoryData>(){}.getType();
@@ -461,7 +477,7 @@ public class StockpilePlugin extends Plugin
 					for (PersistedItem p : list)
 					{
 						addTrackedItem(p.itemId, p.quantity, p.acquisitions, p.notifications, p.notificationsInitialized, p.costBasisInitialized, false, TrackItemMode.TRACK);
-						applyPersistedGrouping(p.itemId, p.favorite, p.category);
+						applyPersistedGrouping(p.itemId, p.favorite, p.category, p.onOverlay);
 					}
 				}
 
@@ -477,11 +493,11 @@ public class StockpilePlugin extends Plugin
 	}
 
 	/**
-	 * Applies a persisted item's favorite/category grouping after it has been added.
+	 * Applies a persisted item's favorite/category/overlay grouping after it has been added.
 	 * Enqueued on the client thread so it runs after the matching {@link #addTrackedItem}
 	 * body (which is itself client-thread-deferred), guaranteeing the item exists.
 	 */
-	private void applyPersistedGrouping(int itemId, boolean favorite, String category)
+	private void applyPersistedGrouping(int itemId, boolean favorite, String category, boolean onOverlay)
 	{
 		clientThread.invokeLater(() ->
 		{
@@ -491,6 +507,7 @@ public class StockpilePlugin extends Plugin
 
 			tracked.setFavorite(favorite);
 			tracked.setCategory(category);
+			tracked.setOnOverlay(onOverlay);
 		});
 	}
 
@@ -553,6 +570,7 @@ public class StockpilePlugin extends Plugin
 			p.notificationsInitialized = item.isNotificationsInitialized();
 			p.favorite = item.isFavorite();
 			p.category = item.getCategory();
+			p.onOverlay = item.isOnOverlay();
 			list.add(p);
 		}
 
@@ -729,6 +747,42 @@ public class StockpilePlugin extends Plugin
 			persistTrackedItems();
 			refreshPanel();
 		});
+	}
+
+	/**
+	 * Adds/removes an item from the on-screen overlay set, enforcing the {@link #OVERLAY_MAX}
+	 * cap (an add beyond the cap is ignored), then persists and refreshes.
+	 */
+	private void setOnOverlay(int itemId, boolean on)
+	{
+		clientThread.invokeLater(() ->
+		{
+			TrackedItem tracked = trackedItems.get(itemId);
+			if (tracked == null || tracked.isOnOverlay() == on)
+				return;
+
+			if (on && overlayItemCount() >= OVERLAY_MAX)
+				return;
+
+			tracked.setOnOverlay(on);
+			persistTrackedItems();
+			refreshPanel();
+		});
+	}
+
+	/** @return how many tracked items are currently flagged for the on-screen overlay. */
+	private int overlayItemCount()
+	{
+		return (int) trackedItems.values().stream().filter(TrackedItem::isOnOverlay).count();
+	}
+
+	/** @return the tracked items shown on the overlay (in tracked order), capped at {@link #OVERLAY_MAX}. */
+	List<TrackedItem> getOverlayItems()
+	{
+		return trackedItems.values().stream()
+				.filter(TrackedItem::isOnOverlay)
+				.limit(OVERLAY_MAX)
+				.collect(java.util.stream.Collectors.toList());
 	}
 
 	/** Sets a list group's collapsed state (a category name, or a special-group key), then persists and refreshes. */
