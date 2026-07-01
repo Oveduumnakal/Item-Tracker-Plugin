@@ -122,6 +122,30 @@ final class MarketClassifier
 	}
 
 	/**
+	 * Sums instant-buy vs instant-sell volume over the given look-back window.
+	 *
+	 * @param series price points at any granularity (only in-window points count)
+	 * @param window how far back to aggregate
+	 * @return {@code {buyVolume, sellVolume}} (high/low price volumes), each 0 when absent
+	 */
+	static long[] buySellVolume(List<WikiRealtimePriceClient.PricePoint> series, java.time.Duration window)
+	{
+		long cutoff = System.currentTimeMillis() / 1000L - window.getSeconds();
+		long buy = 0;
+		long sell = 0;
+		for (WikiRealtimePriceClient.PricePoint p : series)
+		{
+			if (p.getTimestamp() < cutoff)
+				continue;
+
+			buy += p.getHighPriceVolume();
+			sell += p.getLowPriceVolume();
+		}
+
+		return new long[]{buy, sell};
+	}
+
+	/**
 	 * Labels where the live price falls within a {@code [min, max]} range as a
 	 * fraction of the way up, from {@code "Lowest"} to {@code "Highest"}.
 	 *
