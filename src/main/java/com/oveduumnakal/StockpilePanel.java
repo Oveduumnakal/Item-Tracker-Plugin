@@ -329,6 +329,8 @@ public class StockpilePanel extends PluginPanel
 	private EstimatesPosition currentEstimatesPosition;
 
 	private static final Color DIVIDER_COLOR = new Color(80, 80, 80);
+	/** Fainter divider above the footer's Report/Request row: dimmer than {@link #DIVIDER_COLOR} but still visible over the (40,40,40) background. */
+	private static final Color FOOTER_DIVIDER_COLOR = new Color(60, 60, 60);
 	private static final Color OVERVIEW_ROW_DIVIDER = new Color(45, 45, 45);
 	private static final javax.swing.border.Border TITLE_BORDER_WITH_TOP_DIVIDER =
 			BorderFactory.createCompoundBorder(
@@ -402,6 +404,11 @@ public class StockpilePanel extends PluginPanel
 	private static final String ROW_ITEM_ID = "stockpileItemId";
 	/** Client property marking a group accordion header, used to find group boundaries during a drag. */
 	private static final String GROUP_HEADER_KEY = "stockpileGroupHeader";
+
+	/** GitHub new-issue endpoint and templates; the footer forms deep-link here with fields prefilled. */
+	private static final String GITHUB_NEW_ISSUE = "https://github.com/Oveduumnakal/Stockpile-Plugin/issues/new";
+	private static final String BUG_TEMPLATE = "bug_report.yml";
+	private static final String FEATURE_TEMPLATE = "feature_request.yml";
 
 	private static final Color LOADING_COLOR = new Color(150, 150, 150);
 	private static final Color DESCRIPTION_COLOR = new Color(160, 160, 160);
@@ -824,7 +831,10 @@ public class StockpilePanel extends PluginPanel
 		footerPanel.setBorder(BorderFactory.createCompoundBorder(
 				new MatteBorder(1, 0, 0, 0, DIVIDER_COLOR),
 				new EmptyBorder(6, 10, 6, 10)));
-		footerPanel.add(lastRefreshLabel, BorderLayout.CENTER);
+
+		JPanel refreshRow = new JPanel(new BorderLayout());
+		refreshRow.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		refreshRow.add(lastRefreshLabel, BorderLayout.CENTER);
 
 		clearButton.setFont(FontManager.getRunescapeSmallFont());
 		clearButton.setForeground(COLOR_LOW);
@@ -834,7 +844,22 @@ public class StockpilePanel extends PluginPanel
 		clearButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 		clearButton.setEnabled(false);
 		clearButton.addActionListener(e -> confirmAndClearAll());
-		footerPanel.add(clearButton, BorderLayout.EAST);
+		refreshRow.add(clearButton, BorderLayout.EAST);
+
+		JPanel linksRow = new JPanel(new GridLayout(1, 2, 6, 0));
+		linksRow.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		linksRow.setBorder(BorderFactory.createCompoundBorder(
+				new EmptyBorder(6, 0, 0, 0),
+				BorderFactory.createCompoundBorder(
+						new MatteBorder(1, 0, 0, 0, FOOTER_DIVIDER_COLOR),
+						new EmptyBorder(6, 0, 0, 0))));
+		linksRow.add(buildFooterLink("Report Issue", this::openReportIssueForm,
+				"Report a bug — fill it in here, then submit on GitHub"));
+		linksRow.add(buildFooterLink("Request Feature", this::openRequestFeatureForm,
+				"Request a feature — fill it in here, then submit on GitHub"));
+
+		footerPanel.add(refreshRow, BorderLayout.CENTER);
+		footerPanel.add(linksRow, BorderLayout.SOUTH);
 
 		footerPanel.setVisible(false);
 		getWrappedPanel().add(footerPanel, BorderLayout.SOUTH);
@@ -984,6 +1009,201 @@ public class StockpilePanel extends PluginPanel
 				+ "'>" + sign + GpFormat.shortValue(profit) + "</span><span style='color:" + grey + "'>)</span></html>");
 		compactTotalsValueLabel.setToolTipText("<html>" + NUMBER_FORMAT.format(totalAvg) + " gp<br>Profit: "
 				+ sign + NUMBER_FORMAT.format(profit) + " gp</html>");
+	}
+
+	/** Builds a small footer button that runs the given action when clicked. */
+	private JButton buildFooterLink(String text, Runnable onClick, String tooltip)
+	{
+		JButton button = new JButton(text);
+		button.setFont(FontManager.getRunescapeSmallFont());
+		button.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		button.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		button.setFocusPainted(false);
+		button.setMargin(new Insets(2, 2, 2, 2));
+		button.setToolTipText(tooltip);
+		button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+		button.addActionListener(e -> onClick.run());
+
+		return button;
+	}
+
+	/**
+	 * A single field in an issue form mapped to a GitHub form {@code id}. A {@code null}
+	 * {@link #options} makes it a free-text area {@link #rows} tall; a non-null one makes it
+	 * a dropdown whose entries must match the template's option labels exactly.
+	 */
+	private static final class IssueField
+	{
+		final String id;
+		final String label;
+		final int rows;
+		final String[] options;
+
+		IssueField(String id, String label, int rows)
+		{
+			this(id, label, rows, null);
+		}
+
+		IssueField(String id, String label, String[] options)
+		{
+			this(id, label, 0, options);
+		}
+
+		private IssueField(String id, String label, int rows, String[] options)
+		{
+			this.id = id;
+			this.label = label;
+			this.rows = rows;
+			this.options = options;
+		}
+	}
+
+	/** Feature-template "Related area" dropdown options, matched exactly for URL prefill. */
+	private static final String[] FEATURE_AREAS = {
+			"Item tracking (adding / auto-add / consolidation / collection log)",
+			"Live pricing (GE / wiki realtime / time-window values)",
+			"Profit tracking (cost basis / acquisitions / portfolio total)",
+			"Detail view & charts (graphs, timeframes, pop-out windows)",
+			"Notifications / price alerts",
+			"Panel / overlays (ground or inventory highlights)",
+			"Configuration / settings",
+			"New / other"
+	};
+
+	/** Opens the in-plugin "Report a bug" form. */
+	private void openReportIssueForm()
+	{
+		openIssueForm("Report a Bug", BUG_TEMPLATE, "[Bug]: ", Arrays.asList(
+				new IssueField("description", "Describe the bug", 4),
+				new IssueField("repro", "Steps to reproduce", 3),
+				new IssueField("expected", "Expected behavior", 2),
+				new IssueField("actual", "Actual behavior", 2)));
+	}
+
+	/** Opens the in-plugin "Request a feature" form. */
+	private void openRequestFeatureForm()
+	{
+		openIssueForm("Request a Feature", FEATURE_TEMPLATE, "[Feature]: ", Arrays.asList(
+				new IssueField("problem", "Problem or motivation", 3),
+				new IssueField("solution", "Proposed solution", 4),
+				new IssueField("area", "Related area", FEATURE_AREAS),
+				new IssueField("alternatives", "Alternatives considered", 3),
+				new IssueField("context", "Additional context", 3)));
+	}
+
+	/**
+	 * Shows a modal form for an issue template, then opens the GitHub issue form in the browser
+	 * with the entered title/fields pre-filled (via query params) so the user only has to review
+	 * and click Submit on GitHub. No data leaves the machine until they submit on GitHub.
+	 */
+	private void openIssueForm(String dialogTitle, String template, String titlePrefix, List<IssueField> fields)
+	{
+		JDialog dialog = new JDialog(SwingUtilities.getWindowAncestor(this), dialogTitle);
+		dialog.setModal(true);
+
+		JPanel form = new JPanel();
+		form.setLayout(new BoxLayout(form, BoxLayout.Y_AXIS));
+		form.setBorder(new EmptyBorder(8, 8, 8, 8));
+
+		JTextField titleField = new JTextField();
+		addFormRow(form, "Title", titleField);
+
+		Map<IssueField, JComponent> inputs = new java.util.LinkedHashMap<>();
+		for (IssueField field : fields)
+		{
+			if (field.options != null)
+			{
+				JComboBox<String> combo = new JComboBox<>(field.options);
+				combo.insertItemAt("", 0);
+				combo.setSelectedIndex(0);
+				combo.setMaximumSize(new Dimension(Integer.MAX_VALUE, combo.getPreferredSize().height));
+				inputs.put(field, combo);
+				addFormRow(form, field.label, combo);
+			}
+			else
+			{
+				JTextArea area = new JTextArea(field.rows, 28);
+				area.setLineWrap(true);
+				area.setWrapStyleWord(true);
+				inputs.put(field, area);
+				addFormRow(form, field.label, new JScrollPane(area));
+			}
+		}
+
+		JButton submit = new JButton("Open on GitHub");
+		submit.addActionListener(e ->
+		{
+			LinkBrowser.browse(buildIssueUrl(template, titlePrefix, titleField.getText(), fields, inputs));
+			dialog.dispose();
+		});
+
+		JButton cancel = new JButton("Cancel");
+		cancel.addActionListener(e -> dialog.dispose());
+
+		JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 4));
+		buttons.add(cancel);
+		buttons.add(submit);
+
+		JPanel content = new JPanel(new BorderLayout());
+		content.add(new JScrollPane(form), BorderLayout.CENTER);
+		content.add(buttons, BorderLayout.SOUTH);
+
+		dialog.setContentPane(content);
+		dialog.pack();
+		dialog.setLocationRelativeTo(this);
+		dialog.setVisible(true);
+	}
+
+	/** Adds a labelled row (label above the field) to a vertical form panel. */
+	private void addFormRow(JPanel form, String label, JComponent field)
+	{
+		JLabel labelComponent = new JLabel(label);
+		labelComponent.setAlignmentX(Component.LEFT_ALIGNMENT);
+		field.setAlignmentX(Component.LEFT_ALIGNMENT);
+		form.add(labelComponent);
+		form.add(field);
+		form.add(Box.createVerticalStrut(6));
+	}
+
+	/** Builds the GitHub new-issue URL with the title and non-empty fields pre-filled as query params. */
+	private static String buildIssueUrl(String template, String titlePrefix, String title,
+			List<IssueField> fields, Map<IssueField, JComponent> inputs)
+	{
+		StringBuilder url = new StringBuilder(GITHUB_NEW_ISSUE).append("?template=").append(template);
+
+		String trimmedTitle = title == null ? "" : title.trim();
+		if (!trimmedTitle.isEmpty())
+			url.append("&title=").append(encode(titlePrefix + trimmedTitle));
+
+		for (IssueField field : fields)
+		{
+			String value = fieldValue(inputs.get(field)).trim();
+			if (!value.isEmpty())
+				url.append('&').append(field.id).append('=').append(encode(value));
+		}
+
+		return url.toString();
+	}
+
+	/** @return the current text of an issue-form input (text area or dropdown selection). */
+	private static String fieldValue(JComponent input)
+	{
+		if (input instanceof JTextArea)
+			return ((JTextArea) input).getText();
+
+		if (input instanceof JComboBox)
+		{
+			Object selected = ((JComboBox<?>) input).getSelectedItem();
+			return selected == null ? "" : selected.toString();
+		}
+
+		return "";
+	}
+
+	/** URL-encodes a value for a query parameter (spaces as %20, not +). */
+	private static String encode(String value)
+	{
+		return URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20");
 	}
 
 	private void equalizeTotalsLabelWidths()
