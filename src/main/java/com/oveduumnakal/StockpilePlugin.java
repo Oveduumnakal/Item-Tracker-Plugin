@@ -42,14 +42,21 @@ import net.runelite.api.Tile;
 import net.runelite.api.TileItem;
 import net.runelite.api.events.ClientTick;
 import net.runelite.api.events.GameStateChanged;
+import net.runelite.api.events.GameTick;
 import net.runelite.api.events.ItemContainerChanged;
 import net.runelite.api.events.ItemDespawned;
 import net.runelite.api.events.ItemSpawned;
 import net.runelite.api.events.MenuOpened;
 import net.runelite.api.events.VarbitChanged;
+import net.runelite.api.events.WidgetClosed;
+import net.runelite.api.events.WidgetLoaded;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.InventoryID;
+import net.runelite.api.widgets.JavaScriptCallback;
 import net.runelite.api.widgets.Widget;
+import net.runelite.api.widgets.WidgetPositionMode;
+import net.runelite.api.widgets.WidgetTextAlignment;
+import net.runelite.api.widgets.WidgetType;
 import net.runelite.api.widgets.WidgetUtil;
 import net.runelite.api.gameval.VarbitID;
 import net.runelite.client.Notifier;
@@ -141,6 +148,12 @@ public class StockpilePlugin extends Plugin
 	@Inject
 	private StockpileGroundOverlay groundOverlay;
 
+	/** Maximum number of items shown in the on-screen overlay (fixed for now). */
+	static final int OVERLAY_MAX = 5;
+
+	/** One independently-draggable overlay box per slot; they start grouped in the same snap corner. */
+	private final List<StockpileScreenOverlay> screenOverlays = new ArrayList<>();
+
 	private static final int[] RUNE_POUCH_TYPE_VARBITS = {
 			VarbitID.RUNE_POUCH_TYPE_1, VarbitID.RUNE_POUCH_TYPE_2, VarbitID.RUNE_POUCH_TYPE_3,
 			VarbitID.RUNE_POUCH_TYPE_4, VarbitID.RUNE_POUCH_TYPE_5, VarbitID.RUNE_POUCH_TYPE_6
@@ -184,6 +197,11 @@ public class StockpilePlugin extends Plugin
 
 	/** Transient, non-persisted item backing the read-only detail preview (view-only button); not in {@link #trackedItems}. */
 	private TrackedItem previewItem;
+
+	/** The item shown on the currently-open GE offer screen, or -1 when no offer screen is up (GE integration). */
+	private int currentGeItem = -1;
+	/** The native-style button injected onto the GE offer screen in Button mode, or null. */
+	private Widget geButton;
 
 	private final Map<Integer, Map<Integer, Integer>> containerCounts = new HashMap<>();
 
@@ -236,6 +254,7 @@ public class StockpilePlugin extends Plugin
 				this::setGlobalOrder,
 				this::toggleCompactView,
 				this::setFavorite,
+				this::setOnOverlay,
 				this::setGroupCollapsed,
 				new StockpilePanel.CategoryActions()
 				{
@@ -283,6 +302,12 @@ public class StockpilePlugin extends Plugin
 		clientToolbar.addNavigation(navButton);
 		overlayManager.add(highlightOverlay);
 		overlayManager.add(groundOverlay);
+		for (int slot = 0; slot < OVERLAY_MAX; slot++)
+		{
+			StockpileScreenOverlay overlay = new StockpileScreenOverlay(this, config, itemManager, slot);
+			screenOverlays.add(overlay);
+			overlayManager.add(overlay);
+		}
 		clientThread.invokeLater(() ->
 		{
 			loadCategories();
@@ -385,6 +410,8 @@ public class StockpilePlugin extends Plugin
 		clientToolbar.removeNavigation(navButton);
 		overlayManager.remove(highlightOverlay);
 		overlayManager.remove(groundOverlay);
+		screenOverlays.forEach(overlayManager::remove);
+		screenOverlays.clear();
 		panel.shutdown();
 		groundItems.clear();
 		if (priceRefreshTask != null)
@@ -430,6 +457,7 @@ public class StockpilePlugin extends Plugin
 		boolean notificationsInitialized;
 		boolean favorite;
 		String category;
+		boolean onOverlay;
 	}
 
 	private static final Type CATEGORIES_TYPE = new TypeToken<CategoryData>(){}.getType();
@@ -461,7 +489,7 @@ public class StockpilePlugin extends Plugin
 					for (PersistedItem p : list)
 					{
 						addTrackedItem(p.itemId, p.quantity, p.acquisitions, p.notifications, p.notificationsInitialized, p.costBasisInitialized, false, TrackItemMode.TRACK);
-						applyPersistedGrouping(p.itemId, p.favorite, p.category);
+						applyPersistedGrouping(p.itemId, p.favorite, p.category, p.onOverlay);
 					}
 				}
 
@@ -477,11 +505,11 @@ public class StockpilePlugin extends Plugin
 	}
 
 	/**
-	 * Applies a persisted item's favorite/category grouping after it has been added.
+	 * Applies a persisted item's favorite/category/overlay grouping after it has been added.
 	 * Enqueued on the client thread so it runs after the matching {@link #addTrackedItem}
 	 * body (which is itself client-thread-deferred), guaranteeing the item exists.
 	 */
-	private void applyPersistedGrouping(int itemId, boolean favorite, String category)
+	private void applyPersistedGrouping(int itemId, boolean favorite, String category, boolean onOverlay)
 	{
 		clientThread.invokeLater(() ->
 		{
@@ -491,6 +519,7 @@ public class StockpilePlugin extends Plugin
 
 			tracked.setFavorite(favorite);
 			tracked.setCategory(category);
+			tracked.setOnOverlay(onOverlay);
 		});
 	}
 
@@ -553,6 +582,7 @@ public class StockpilePlugin extends Plugin
 			p.notificationsInitialized = item.isNotificationsInitialized();
 			p.favorite = item.isFavorite();
 			p.category = item.getCategory();
+			p.onOverlay = item.isOnOverlay();
 			list.add(p);
 		}
 
@@ -729,6 +759,42 @@ public class StockpilePlugin extends Plugin
 			persistTrackedItems();
 			refreshPanel();
 		});
+	}
+
+	/**
+	 * Adds/removes an item from the on-screen overlay set, enforcing the {@link #OVERLAY_MAX}
+	 * cap (an add beyond the cap is ignored), then persists and refreshes.
+	 */
+	private void setOnOverlay(int itemId, boolean on)
+	{
+		clientThread.invokeLater(() ->
+		{
+			TrackedItem tracked = trackedItems.get(itemId);
+			if (tracked == null || tracked.isOnOverlay() == on)
+				return;
+
+			if (on && overlayItemCount() >= OVERLAY_MAX)
+				return;
+
+			tracked.setOnOverlay(on);
+			persistTrackedItems();
+			refreshPanel();
+		});
+	}
+
+	/** @return how many tracked items are currently flagged for the on-screen overlay. */
+	private int overlayItemCount()
+	{
+		return (int) trackedItems.values().stream().filter(TrackedItem::isOnOverlay).count();
+	}
+
+	/** @return the tracked items shown on the overlay (in tracked order), capped at {@link #OVERLAY_MAX}. */
+	List<TrackedItem> getOverlayItems()
+	{
+		return trackedItems.values().stream()
+				.filter(TrackedItem::isOnOverlay)
+				.limit(OVERLAY_MAX)
+				.collect(java.util.stream.Collectors.toList());
 	}
 
 	/** Sets a list group's collapsed state (a category name, or a special-group key), then persists and refreshes. */
@@ -1062,6 +1128,8 @@ public class StockpilePlugin extends Plugin
 			WikiRealtimePriceClient.ItemPrices prices = all.get(previewItem.getItemId());
 			if (prices != null)
 				applyLivePrices(previewItem, prices);
+			else if (!previewItem.hasPrices() && previewItem.isTradeable() && mappingsLoaded)
+				previewItem.setPriceLoadFailed(true);
 		}
 
 		if (fetchFailed)
@@ -1141,9 +1209,19 @@ public class StockpilePlugin extends Plugin
 			case StockpileConfig.KEY_PRICE_REFRESH_SECONDS:
 				scheduleRefresh();
 				return;
+			case StockpileConfig.KEY_SCREEN_OVERLAY_ON_TOP:
+				rebucketScreenOverlays();
+				return;
 			default:
 				refreshPanel();
 		}
+	}
+
+	/** Removes and re-adds the screen overlays so the manager re-buckets them into their (config-driven) layer. */
+	private void rebucketScreenOverlays()
+	{
+		screenOverlays.forEach(overlayManager::remove);
+		screenOverlays.forEach(overlayManager::add);
 	}
 
 	private static final java.util.Set<String> SECTION_SLOT_KEYS = java.util.Set.of(
@@ -1155,7 +1233,8 @@ public class StockpilePlugin extends Plugin
 			StockpileConfig.KEY_SHOW_VOLUME_GRAPH,
 			StockpileConfig.KEY_SHOW_ALCH_INFO,
 			StockpileConfig.KEY_SHOW_NOTIFICATIONS,
-			StockpileConfig.KEY_SHOW_ITEM_LOG);
+			StockpileConfig.KEY_SHOW_ITEM_LOG,
+			StockpileConfig.KEY_SHOW_LINKS);
 
 	/**
 	 * Keeps detail-section slots unique: when a section is moved to a slot already
@@ -1347,6 +1426,154 @@ public class StockpilePlugin extends Plugin
 
 		normal.addAll(trackedTakes);
 		client.setMenuEntries(normal.toArray(new MenuEntry[0]));
+	}
+
+	/**
+	 * Grand Exchange integration: each tick, detects the item on the open offer setup/details
+	 * screen and, per {@link StockpileConfig#geIntegration()}, either auto-opens it in Stockpile
+	 * or injects a "View in Stockpile" button. Only acts when the shown item changes.
+	 */
+	@Subscribe
+	public void onGameTick(GameTick event)
+	{
+		GeIntegrationMode mode = config.geIntegration();
+		if (mode == GeIntegrationMode.OFF)
+		{
+			currentGeItem = -1;
+			geButton = null;
+			return;
+		}
+
+		int item = currentGeOfferItem();
+		if (item != currentGeItem)
+		{
+			currentGeItem = item;
+			geButton = null;
+
+			if (item > 0 && (mode == GeIntegrationMode.AUTO || mode == GeIntegrationMode.BOTH))
+				openGeItemInStockpile(item);
+		}
+
+		if ((mode == GeIntegrationMode.BUTTON || mode == GeIntegrationMode.BOTH) && item > 0 && geButton == null)
+			injectGeButton();
+	}
+
+	/** Forces the GE button to be re-injected against a freshly (re)built offer interface. */
+	@Subscribe
+	public void onWidgetLoaded(WidgetLoaded event)
+	{
+		if (event.getGroupId() == InterfaceID.GE_OFFERS)
+			geButton = null;
+	}
+
+	/** Clears GE-integration state when the offer interface closes. */
+	@Subscribe
+	public void onWidgetClosed(WidgetClosed event)
+	{
+		if (event.getGroupId() == InterfaceID.GE_OFFERS)
+		{
+			currentGeItem = -1;
+			geButton = null;
+		}
+	}
+
+	/** @return the item shown on the visible GE offer setup/details screen, or -1 when none is open. */
+	private int currentGeOfferItem()
+	{
+		int item = itemInGeContainer(InterfaceID.GeOffers.SETUP);
+		if (item > 0)
+			return item;
+
+		return itemInGeContainer(InterfaceID.GeOffers.DETAILS);
+	}
+
+	/** @return the first item id found in the given GE container's subtree, or -1 when hidden/absent. */
+	private int itemInGeContainer(int componentId)
+	{
+		Widget container = client.getWidget(componentId);
+		if (container == null || container.isHidden())
+			return -1;
+
+		return scanForItem(container);
+	}
+
+	/** Recursively searches a widget subtree for the first child holding a real item id. */
+	private int scanForItem(Widget widget)
+	{
+		if (widget == null)
+			return -1;
+
+		if (widget.getItemId() > 0 && isRealItem(widget.getItemId()))
+			return widget.getItemId();
+
+		Widget[][] groups = {widget.getStaticChildren(), widget.getDynamicChildren(), widget.getNestedChildren()};
+		for (Widget[] group : groups)
+		{
+			if (group == null)
+				continue;
+
+			for (Widget child : group)
+			{
+				int id = scanForItem(child);
+				if (id > 0)
+					return id;
+			}
+		}
+
+		return -1;
+	}
+
+	/**
+	 * @return whether {@code itemId} resolves to a real, defined item. Empty widget
+	 * slots are backed by placeholder items (e.g. id 6512) whose composition name is
+	 * the literal string "null"; those must not open a preview.
+	 */
+	private boolean isRealItem(int itemId)
+	{
+		String name = itemManager.getItemComposition(itemId).getName();
+		return name != null && !name.isEmpty() && !"null".equalsIgnoreCase(name);
+	}
+
+	/** Opens the item in Stockpile's view-only preview, switching to/focusing the panel when configured. */
+	private void openGeItemInStockpile(int itemId)
+	{
+		if (itemId <= 0)
+			return;
+
+		previewItem(itemId);
+		if (config.geFocusPanel())
+			SwingUtilities.invokeLater(() -> clientToolbar.openPanel(navButton));
+	}
+
+	/** Injects a native-style "View in Stockpile" button onto the visible GE offer container. */
+	private void injectGeButton()
+	{
+		Widget container = client.getWidget(InterfaceID.GeOffers.SETUP);
+		if (container == null || container.isHidden())
+			container = client.getWidget(InterfaceID.GeOffers.DETAILS);
+
+		if (container == null || container.isHidden())
+			return;
+
+		Widget button = container.createChild(-1, WidgetType.TEXT);
+		button.setText("View in Stockpile");
+		button.setFontId(495);
+		button.setTextColor(0xff981f);
+		button.setTextShadowed(true);
+		button.setXPositionMode(WidgetPositionMode.ABSOLUTE_RIGHT);
+		button.setXTextAlignment(WidgetTextAlignment.RIGHT);
+		button.setOriginalX(10);
+		button.setOriginalY(10);
+		button.setOriginalWidth(120);
+		button.setOriginalHeight(18);
+		button.setHasListener(true);
+		button.setAction(0, "View in Stockpile");
+		button.setOnOpListener((JavaScriptCallback) e -> openGeItemInStockpile(currentGeItem));
+		button.setOnMouseOverListener((JavaScriptCallback) e -> button.setTextColor(0xffffff));
+		button.setOnMouseLeaveListener((JavaScriptCallback) e -> button.setTextColor(0xff981f));
+		button.revalidate();
+
+		geButton = button;
 	}
 
 	/** Records a ground item and its tile so the ground overlay can outline it. */
