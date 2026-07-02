@@ -78,6 +78,7 @@ public interface StockpileConfig extends Config
 	String KEY_SHOW_ALCH_INFO = "showAlchInfo";
 	String KEY_SHOW_NOTIFICATIONS = "showNotifications";
 	String KEY_SHOW_ITEM_LOG = "showItemLog";
+	String KEY_SHOW_LINKS = "showLinks";
 	String KEY_PRESSURE_WINDOW = "buySellPressureWindow";
 	String KEY_PRICE_OVERVIEW_ROWS = "priceOverviewPreset";
 	String KEY_AUTO_ADD_ITEMS = "autoAddItems";
@@ -409,7 +410,7 @@ public interface StockpileConfig extends Config
 	)
 	default SectionSlot showNotifications()
 	{
-		return SectionSlot.EIGHTH;
+		return SectionSlot.NINTH;
 	}
 
 	@ConfigItem(
@@ -421,7 +422,19 @@ public interface StockpileConfig extends Config
 	)
 	default SectionSlot showItemLog()
 	{
-		return SectionSlot.NINTH;
+		return SectionSlot.TENTH;
+	}
+
+	@ConfigItem(
+			keyName = KEY_SHOW_LINKS,
+			name = "Show Links",
+			description = "Position of the Links section (Wiki / Live Prices), or None to hide it",
+			section = detailViewSection,
+			position = 10
+	)
+	default SectionSlot showLinks()
+	{
+		return SectionSlot.EIGHTH;
 	}
 
 	@ConfigItem(
